@@ -1,0 +1,26 @@
+services:
+  flowdesk:
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /app/data
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - flowdesk-data:/app/data
+    restart: unless-stopped
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_SECURE_COOKIE: "false"
+    volumes:
+      - n8n-data:/home/node/.n8n
+    restart: unless-stopped
+volumes:
+  flowdesk-data:
+  n8n-data:

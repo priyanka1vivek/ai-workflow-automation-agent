@@ -1,0 +1,155 @@
+{
+  "name": "FlowDesk | AI Workflow Automation Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## FlowDesk \u2014 support triage\n1. Configure Webhook Header Auth (X-Webhook-Token).\n2. Configure Header Auth on both HTTP nodes: Authorization: Bearer <APP_TOKEN>.\n3. Base URL is http://flowdesk:3000 in Docker Compose. Change it if hosted elsewhere.\n4. Publish/activate, then POST synthetic title/message JSON.\n5. Review and approve delivery in the FlowDesk dashboard. No automatic approval.",
+        "height": 300,
+        "width": 500
+      },
+      "id": "setup-note",
+      "name": "Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "flowdesk-triage",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "intake",
+      "name": "Receive request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        160,
+        180
+      ],
+      "webhookId": "flowdesk-triage"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://flowdesk:3000/api/requests",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Idempotency-Key",
+              "value": "={{ $json.headers['idempotency-key'] || $execution.id }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.body.title, message: $json.body.message, source: \"n8n\", autoProcess: false }) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "persist",
+      "name": "Validate and store",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        400,
+        180
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ \"http://flowdesk:3000/api/requests/\" + $json.id + \"/classify\" }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "classify",
+      "name": "Classify summarize and route",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        180
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": "={{ $json.status === \"failed\" ? 422 : 200 }}"
+        }
+      },
+      "id": "respond",
+      "name": "Return review-ready result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [
+        920,
+        180
+      ]
+    }
+  ],
+  "connections": {
+    "Receive request": {
+      "main": [
+        [
+          {
+            "node": "Validate and store",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and store": {
+      "main": [
+        [
+          {
+            "node": "Classify summarize and route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify summarize and route": {
+      "main": [
+        [
+          {
+            "node": "Return review-ready result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true
+  },
+  "active": false,
+  "pinData": {},
+  "tags": []
+}
