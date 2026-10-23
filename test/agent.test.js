@@ -39,8 +39,10 @@ async function fixture(t, overrides = {}) {
   const user = app.store.createUser('owner@example.test', hashPassword('a-secure-test-password'));
   await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
+  const login = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: user.email, password: 'a-secure-test-password' }) });
+  const cookie = login.headers.get('set-cookie');
   t.after(async () => { await new Promise(r => app.server.close(r)); app.store.close(); rmSync(dataDir, { recursive: true, force: true }); });
-  return { app, config, base, async api(path, body, extra = {}) { const response = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json', ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, data: await response.json() }; } };
+  return { app, config, base, cookie, async api(path, body, extra = {}) { const response = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json', ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, data: await response.json() }; } };
 }
 test('authentication protects stored requests and config never leaks secrets', async t => {
   const f = await fixture(t); assert.equal((await fetch(f.base + '/api/requests')).status, 401);
@@ -108,4 +110,39 @@ test('new accounts have isolated request lists and cannot inspect another accoun
   assert.equal(second.status, 201);
   assert.equal((await f.api('/api/requests')).data.requests.length, 1);
   assert.equal((await f.api(`/api/requests/${(await second.json()).id}`)).status, 404);
+});
+test('requester joins owner workspace, submits, sees only own work, and cannot approve', async t => {
+  const f = await fixture(t);
+  const workspace = (await f.api('/api/workspace')).data;
+  const registration = await fetch(f.base + '/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'requester@example.test', password: 'another-secure-password', inviteCode: workspace.inviteCode }) });
+  assert.equal(registration.status, 201);
+  const cookie = registration.headers.get('set-cookie');
+  const post = await fetch(f.base + '/api/requests', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Login issue', message: 'Our dashboard login is broken for the team.' }) });
+  assert.equal(post.status, 201); const r = await post.json(); assert.equal(r.status, 'review');
+  assert.equal((await f.api('/api/requests')).data.requests[0].id, r.id);
+  const denied = await fetch(f.base + `/api/requests/${r.id}/approve`, { method: 'POST', headers: { Cookie: cookie } });
+  assert.equal(denied.status, 403);
+  assert.equal((await f.api(`/api/requests/${r.id}/approve`, {})).data.status, 'completed');
+  assert.equal((await fetch(f.base + '/api/workspace', { headers: { Cookie: cookie } })).status, 403);
+});
+test('connection secrets stay server-side and generated webhook token can intake but not approve', async t => {
+  const f = await fixture(t);
+  const saved = await f.api('/api/connections', { openaiKey: 'sk-test-private-value', slackUrl: 'https://hooks.slack.com/services/test' });
+  assert.equal(saved.status, 200);
+  assert.equal((await f.api('/api/config')).data.integrations.openai, true);
+  assert.ok(!JSON.stringify((await f.api('/api/config')).data).includes('sk-test-private-value'));
+  const token = (await f.api('/api/workspace/token', {})).data.token;
+  const post = await fetch(f.base + '/api/requests', { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Webhook intake', message: 'Please route this inbound workflow request.' }) });
+  assert.equal(post.status, 201); const r = await post.json(); assert.equal(r.source, 'webhook');
+  const denied = await fetch(f.base + `/api/requests/${r.id}/approve`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(denied.status, 403);
+});
+test('without an AI key intake persists queued work and does not invent analysis', async t => {
+  const f = await fixture(t, { classify: undefined });
+  const created = await f.api('/api/requests', { title: 'Unclassified intake', message: 'Please route this request when AI is connected.' });
+  assert.equal(created.status, 201);
+  assert.equal(created.data.status, 'queued');
+  assert.equal(created.data.analysis, null);
+  assert.equal((await f.api(`/api/requests/${created.data.id}/classify`, {})).status, 409);
+  assert.equal((await f.api('/api/requests')).data.requests.length, 1);
 });

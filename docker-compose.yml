@@ -1,7 +1,6 @@
 services:
   flowdesk:
     build: .
-    env_file: .env
     environment:
       HOST: 0.0.0.0
       PORT: 3000

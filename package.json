@@ -4,6 +4,13 @@
   "private": true,
   "description": "A support-triage automation agent with a dashboard, structured AI analysis, n8n orchestration, Slack and Google Sheets adapters.",
   "type": "module",
-  "engines": { "node": ">=24" },
-  "scripts": { "start": "node --env-file-if-exists=.env src/server.js", "dev": "node --watch --env-file-if-exists=.env src/server.js", "test": "node --test", "check": "node --check src/server.js && node --check src/auth.js && node --check src/agent.js && node --check public/app.js" }
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "test": "node --test",
+    "check": "node --check src/server.js && node --check src/auth.js && node --check src/store.js && node --check src/agent.js && node --check public/app.js"
+  }
 }
