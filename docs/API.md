@@ -1,43 +1,29 @@
-# API reference
+# FlowDesk API
 
-All `/api/*` endpoints require `Authorization: Bearer <APP_TOKEN>` when a token is configured. External hosting requires a token. Request JSON bodies are limited to 20 KB; messages to 5,000 characters. All calls are same-origin in the dashboard. There is a coarse in-memory limit of 180 API calls per minute per socket IP.
+The dashboard signs in at `POST /api/auth/login` using the owner email and password and receives a signed, HttpOnly, SameSite cookie valid for 12 hours. `GET /api/auth/me` confirms the session; `POST /api/auth/logout` clears it. All request and config endpoints accept that cookie. n8n and external webhook clients use `Authorization: Bearer <APP_TOKEN>` instead. The machine token grants full workspace API access, so keep it private.
 
 | Method | Endpoint | Purpose |
-|---|---|---|
-| GET | `/healthz` | Public health check, no user data |
-| GET | `/api/config` | AI mode and boolean integration status; no credentials |
+| --- | --- | --- |
+| GET | `/healthz` | Public readiness response; no workspace data |
+| POST | `/api/auth/login` | Create an owner session |
+| GET | `/api/auth/me` | Return signed-in owner email |
+| POST | `/api/auth/logout` | Clear the browser session |
+| GET | `/api/config` | AI model and boolean integration status; no credentials |
 | GET | `/api/requests` | List persisted requests, newest first |
-| GET | `/api/requests/:id` | Get a request with analysis, deliveries and events |
+| GET | `/api/requests/:id` | Get one request, its analysis, deliveries and events |
 | POST | `/api/requests` | Create and classify a request |
 | POST | `/api/webhook` | Create and classify an externally received request |
-| POST | `/api/requests/:id/classify` | Classify a queued or failed request; keep existing analysis |
+| POST | `/api/requests/:id/classify` | Retry classification of a queued or failed request |
 | POST | `/api/requests/:id/approve` | Approve and deliver a classified request |
 
-## Create
+A request body:
 
 ```json
-{
-  "title": "Dashboard error",
-  "message": "The dashboard shows an error when the support team signs in.",
-  "source": "dashboard",
-  "autoProcess": true
-}
+{ "title": "Dashboard access blocked", "message": "Our support team cannot sign in to the dashboard.", "source": "dashboard", "autoProcess": true }
 ```
 
-`source` is `dashboard`, `webhook` or `n8n`. `autoProcess:false` leaves the request queued for a separate classify call. `/api/webhook` sets the source to `webhook`. Supply `Idempotency-Key` to reuse the same request for a repeated event. Reusing a key with different title/message content returns 409. A new request returns 201; an existing idempotent request returns 200.
+`source` is `dashboard`, `webhook` or `n8n`. `autoProcess:false` stores a queued request for the n8n classify step. `/api/webhook` marks the source as `webhook`. Supply an `Idempotency-Key` header for repeated events: matching content returns the original request, conflicting content returns 409. Request JSON is capped at 20 KB and message text at 5,000 characters.
 
-## Approval
+The states are `queued → processing → review → delivering → completed`; classification failure becomes `failed`, and destination failure or uncertainty becomes `partial`. Approval requires a stored analysis and is never automatic. Repeated approval skips already sent or previewed destinations; uncertain delivery is held for manual verification. A reviewer’s approval sends the summary only, never the suggested reply.
 
-Only invoke approval after a person reviewed the request. Authentication grants approval capability; there is no separate role system. Approval sends a summary to configured Slack/Sheets destinations when `LIVE_DELIVERY=true`. Unconfigured destinations produce labelled simulations. It does **not** send the draft reply to a customer.
-
-Delivery statuses are `sending`, `sent`, `simulated`, `failed` or `uncertain`. Repeated approval does not replay completed destinations. A failed destination may be retried; an uncertain destination is held for manual verification.
-
-## Request states
-
-`queued → processing → review → delivering → completed`
-
-Classification failure produces `failed`. An unsuccessful or uncertain destination produces `partial`. Each state change and retry is recorded in the `events` array. Classification failure is returned as a persisted request with `status:"failed"`, not a successful AI analysis.
-
-## Errors
-
-400 invalid JSON/input; 401 missing/wrong token; 403 cross-origin access; 404 unknown request/endpoint; 409 concurrent run or state/idempotency conflict; 413 oversized body; 415 unsupported content type; 429 local rate limit.
+Errors: 400 invalid input; 401 missing or expired session/token; 403 cross-origin request; 404 missing resource; 409 concurrency or idempotency conflict; 413 oversized body; 415 non-JSON input; 429 rate limit. Responses use JSON with `{ "error": "..." }` on failure.

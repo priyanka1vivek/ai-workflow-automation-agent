@@ -5,10 +5,12 @@ import { fileURLToPath } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
 import { classify, deliver, validateInput, integrationConfigured } from './agent.js';
 import { openStore } from './store.js';
+import { checkCredentials, createSession, readSession, sessionCookie, clearSessionCookie } from './auth.js';
 
 export function envConfig(env = process.env) {
   return { port: Number(env.PORT || 3000), host: env.HOST || '127.0.0.1', dataDir: resolve(env.DATA_DIR || 'data'),
-    aiMode: env.AI_MODE || 'demo', openaiKey: env.OPENAI_API_KEY || '', model: env.OPENAI_MODEL || 'gpt-4o-mini',
+    openaiKey: env.OPENAI_API_KEY || '', model: env.OPENAI_MODEL || 'gpt-4o-mini',
+    ownerEmail: env.OWNER_EMAIL || '', ownerPassword: env.OWNER_PASSWORD || '', sessionSecret: env.SESSION_SECRET || '',
     token: env.APP_TOKEN || '', liveDelivery: env.LIVE_DELIVERY === 'true', slackUrl: env.SLACK_WEBHOOK_URL || '',
     googleEmail: env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '', googlePrivateKey: env.GOOGLE_PRIVATE_KEY || '',
     sheetId: env.GOOGLE_SHEET_ID || '', sheetTab: env.GOOGLE_SHEET_TAB || 'Requests' };
@@ -23,9 +25,10 @@ async function readBody(req) {
 }
 function send(res, status, body) { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(body)); }
 export function createApp(config, overrides = {}) {
-  if (!['demo', 'live'].includes(config.aiMode)) throw new Error('AI_MODE must be demo or live.');
+  if (!config.ownerEmail?.includes('@') || config.ownerPassword?.length < 12 || config.sessionSecret?.length < 32)
+    throw new Error('Set OWNER_EMAIL, OWNER_PASSWORD (12+ characters), and SESSION_SECRET (32+ characters) in .env.');
   if (!['127.0.0.1', 'localhost', '::1'].includes(config.host) && config.token.length < 24) throw new Error('Network hosting requires APP_TOKEN with at least 24 characters.');
-  const store = openStore(config.dataDir), locks = new Set(), buckets = new Map();
+  const store = openStore(config.dataDir), locks = new Set(), buckets = new Map(), loginAttempts = new Map();
   const classifyFn = overrides.classify || classify, deliverFn = overrides.deliver || deliver;
   function event(r, stage, detail, status = 'ok') { r.events.push({ at: new Date().toISOString(), stage, detail, status }); r.updatedAt = new Date().toISOString(); store.save(r); }
   function get(id) { const r = store.get(id); if (!r) throw fail(404, 'Request not found.'); return r; }
@@ -64,14 +67,30 @@ export function createApp(config, overrides = {}) {
       const url = new URL(req.url, 'http://localhost'), path = url.pathname;
       if (path === '/healthz') return send(res, 200, { status: 'ok' });
       if (path.startsWith('/api/')) {
-        if (config.token && !equal(req.headers.authorization || '', `Bearer ${config.token}`)) throw fail(401, 'Enter the APP_TOKEN to access this dashboard.');
         const origin = req.headers.origin;
         if (origin && new URL(origin).host !== req.headers.host) throw fail(403, 'Cross-origin requests are not allowed.');
         const ip = req.socket.remoteAddress || 'unknown', now = Date.now();
         if (buckets.size > 5000) buckets.clear();
         let bucket = buckets.get(ip); if (!bucket || now - bucket.at > 60000) { bucket = { at: now, count: 0 }; buckets.set(ip, bucket); }
         if (++bucket.count > 180) throw fail(429, 'Too many requests. Try again in a minute.');
-        if (req.method === 'GET' && path === '/api/config') return send(res, 200, { aiMode: config.aiMode, model: config.aiMode === 'live' ? config.model : 'Deterministic rules', liveDelivery: config.liveDelivery,
+        const secure = !!req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+        if (path === '/api/auth/login' && req.method === 'POST') {
+          let attempts = loginAttempts.get(ip); if (!attempts || now - attempts.at > 15 * 60000) attempts = { at: now, count: 0 };
+          if (attempts.count >= 8) throw fail(429, 'Too many sign-in attempts. Try again in 15 minutes.');
+          const credentials = await readBody(req);
+          if (!checkCredentials(credentials.email, credentials.password, config)) {
+            attempts.count++; loginAttempts.set(ip, attempts); throw fail(401, 'Incorrect email or password.');
+          }
+          loginAttempts.delete(ip); res.setHeader('Set-Cookie', sessionCookie(createSession(config), secure));
+          return send(res, 200, { email: config.ownerEmail });
+        }
+        if (path === '/api/auth/logout' && req.method === 'POST') {
+          res.setHeader('Set-Cookie', clearSessionCookie(secure)); return send(res, 200, { ok: true });
+        }
+        const machine = !!config.token && equal(req.headers.authorization || '', `Bearer ${config.token}`);
+        if (!machine && !readSession(req, config)) throw fail(401, 'Sign in to your workspace.');
+        if (req.method === 'GET' && path === '/api/auth/me') return send(res, 200, { email: config.ownerEmail });
+        if (req.method === 'GET' && path === '/api/config') return send(res, 200, { model: config.model, liveDelivery: config.liveDelivery,
           integrations: { openai: !!config.openaiKey, slack: integrationConfigured(config, 'slack'), sheets: integrationConfigured(config, 'sheets') } });
         if (req.method === 'GET' && path === '/api/requests') return send(res, 200, { requests: store.list() });
         if (req.method === 'POST' && ['/api/requests', '/api/webhook'].includes(path)) {
@@ -102,7 +121,7 @@ export function createApp(config, overrides = {}) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const config = envConfig(), app = createApp(config);
-  app.server.listen(config.port, config.host, () => console.log(`FlowDesk · http://${config.host}:${config.port} · ${config.aiMode} mode`));
+  app.server.listen(config.port, config.host, () => console.log(`FlowDesk · http://${config.host}:${config.port}`));
   const stop = () => app.server.close(() => { app.store.close(); process.exit(0); });
   process.on('SIGTERM', stop); process.on('SIGINT', stop);
 }

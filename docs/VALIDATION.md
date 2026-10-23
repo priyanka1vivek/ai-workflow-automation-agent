@@ -1,17 +1,5 @@
-# Validation record
+# Validation boundary
 
-Verified in the build environment with Node.js v24.19.0:
+`npm test` exercises input validation and identifier redaction, structured output rejection, transient retry handling, owner session authentication, same-origin checks, request idempotency, persistence, approval gating, partial delivery retry behavior and uncertain outcomes. `npm run check` checks server, AI and browser JavaScript syntax.
 
-- `npm run check`: passed JavaScript syntax checks for server, agent and dashboard.
-- `npm test`: 12 tests passed, 0 failed.
-- Application startup: server logged its address and explicit demo mode.
-- n8n export: JSON parses; every connected node is defined; no credentials are embedded.
-
-Not verified here:
-
-- Interactive browser rendering and UI interactions. Local Chromium was unavailable and its download failed; the separate cloud browser could not reach the local server.
-- Real OpenAI inference, Slack delivery or Google Sheets delivery, because credentials were not provided.
-- Import and execution inside a real n8n instance.
-- Docker build and container execution.
-
-The README contains the steps to verify these in the user's environment. These boundaries are not evidence of a successful live deployment.
+External services are intentionally not contacted by the automated test suite. To verify the resume’s complete integration claims, run a real OpenAI request, post to an activated n8n webhook, approve in the dashboard, and observe Slack and Google Sheets delivery. Record the results before describing the workflow as deployed or measured. Classification failure stays visible and does not fall back to a fake AI result.

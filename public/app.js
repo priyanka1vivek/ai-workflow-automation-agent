@@ -1,127 +1,171 @@
 const $ = selector => document.querySelector(selector);
-const state = { requests: [], config: null, view: 'overview', selected: null, token: sessionStorage.getItem('flowdesk-token') || '' };
-const labels = { review: 'Ready for review', queued: 'Queued', processing: 'Processing', delivering: 'Delivering', completed: 'Completed', failed: 'Failed', partial: 'Partial delivery' };
-const samples = [
-  { title: 'Dashboard access is blocked', message: 'Our production support team cannot access the dashboard. Login returns an error for all users. This is urgent and work is blocked.' },
-  { title: 'Duplicate charge on the monthly invoice', message: 'The monthly invoice shows a duplicate charge for our subscription. Please review the billing entry and explain the next steps.' },
-  { title: 'Question about support hours', message: 'How do I find information about weekend support hours and the best way to contact the team?' }
-];
-function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
-function badge(text, style) { return el('span', `badge ${style}`, text); }
-function time(value) { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
-function toast(message, error = false) { $('#toast').textContent = message; $('#toast').className = `toast show${error ? ' error' : ''}`; clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('show'), 4500); }
+const state = { requests: [], config: null, view: 'overview', eventFilter: 'all', email: '' };
+const statusNames = { queued: 'Queued', processing: 'Processing', review: 'Needs review', delivering: 'Delivering', completed: 'Completed', failed: 'Failed', partial: 'Partial delivery' };
+const stageNames = { receive: 'Received', classify: 'AI classification', route: 'Routed', approve: 'Approved', slack: 'Slack delivery', sheets: 'Google Sheets', retry: 'Retry' };
+const views = {
+  overview: ['Overview', 'WORKSPACE SNAPSHOT', 'Good work starts with a clear queue.', 'A quick view of what has arrived, what needs review, and what moved forward.'],
+  requests: ['Requests', 'REQUEST INBOX', 'Every request has a next step.', 'Find a request, inspect its AI analysis, and approve delivery.'],
+  activity: ['Activity', 'EXECUTION HISTORY', 'See what happened, in order.', 'Trace intake, classification, routing, retries and delivery.'],
+  integrations: ['Connections', 'WORKFLOW CONNECTIONS', 'A connected workflow, end to end.', 'Check your AI, webhook and delivery setup in one place.']
+};
+function node(tag, className, content) { const n = document.createElement(tag); if (className) n.className = className; if (content !== undefined) n.textContent = content; return n; }
+function date(value) { return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
+function shortTime(value) { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+function notify(message, error = false) { const t = $('#toast'); t.textContent = message; t.className = `toast visible${error ? ' error' : ''}`; clearTimeout(notify.timer); notify.timer = setTimeout(() => t.classList.remove('visible'), 4500); }
+function signedOut() { $('#app-shell').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); }
+function signedIn(email) { state.email = email; $('#login-screen').classList.add('hidden'); $('#app-shell').classList.remove('hidden'); $('#profile-name').textContent = email; $('#profile-avatar').textContent = email[0].toUpperCase(); }
 async function api(path, options = {}) {
-  const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}), ...options.headers } });
-  const data = await response.json();
-  if (response.status === 401) { if (!$('#auth-dialog').open) $('#auth-dialog').showModal(); throw new Error('Workspace token required.'); }
+  const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
+  let data; try { data = await response.json(); } catch { throw new Error('The server did not return JSON.'); }
+  if (response.status === 401 && !path.startsWith('/api/auth/')) signedOut();
   if (!response.ok) throw new Error(data.error || 'Request failed.');
   return data;
 }
-async function refresh() { const [config, data] = await Promise.all([api('/api/config'), api('/api/requests')]); state.config = config; state.requests = data.requests; render(); }
-function setView(view) {
-  state.view = view;
-  document.querySelectorAll('nav .nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  $('#overview-view').classList.toggle('hidden', !['overview', 'requests'].includes(view));
-  $('#integrations-view').classList.toggle('hidden', view !== 'integrations'); $('#activity-view').classList.toggle('hidden', view !== 'activity');
-  const titles = { overview: ['Overview', 'A clearer queue. A calmer day.', 'Classify, summarize and route every request from one place.'], requests: ['Request inbox', 'Every request, in the right place.', 'Review decisions, approve delivery and follow each run.'], integrations: ['Integrations', 'Connect the tools you work with.', 'One workflow, connected to your team’s everyday tools.'], activity: ['Execution log', 'A trace of every next step.', 'Inspect classification, routing, retries and integration delivery.'] };
-  const [crumb, title, description] = titles[view]; $('#breadcrumb-view').textContent = crumb; $('#page-heading').textContent = title; $('#page-description').textContent = description;
+async function load() {
+  const [config, result] = await Promise.all([api('/api/config'), api('/api/requests')]);
+  state.config = config; state.requests = result.requests; render();
 }
+function setView(view) {
+  if (!views[view]) return;
+  state.view = view;
+  document.querySelectorAll('.nav-link').forEach(button => button.classList.toggle('active', button.dataset.view === view));
+  document.querySelectorAll('.view').forEach(element => element.classList.toggle('hidden', element.id !== `${view}-view`));
+  const [breadcrumb, kicker, title, description] = views[view];
+  $('#breadcrumb-view').textContent = breadcrumb; $('#section-kicker').textContent = kicker; $('#page-title').textContent = title; $('#page-subtitle').textContent = description;
+  if (view === 'overview') renderOverview();
+  if (view === 'requests') renderRequests();
+  if (view === 'activity') renderActivity();
+  if (view === 'integrations') renderConnections();
+}
+function pill(text, className = '') { return node('span', `pill ${className}`, text); }
 function render() {
   const r = state.requests, config = state.config;
-  $('#stat-total').textContent = r.length; $('#stat-review').textContent = r.filter(x => x.status === 'review').length;
-  $('#stat-complete').textContent = r.filter(x => x.status === 'completed').length; $('#stat-high').textContent = r.filter(x => x.analysis?.priority === 'high').length;
-  $('#inbox-count').textContent = r.filter(x => !['completed'].includes(x.status)).length; $('#queue-count').textContent = r.length;
-  $('#mode-badge').textContent = config.aiMode === 'demo' ? '● Demo mode' : '● Live AI';
-  const banner = $('#mode-banner'); banner.querySelector('strong').textContent = config.aiMode === 'demo' ? 'Demo workspace' : 'Live AI workspace';
-  banner.querySelector('div > span').textContent = config.aiMode === 'demo' ? `Local rules power classification. ${config.liveDelivery ? 'Configured integrations can deliver after approval.' : 'External deliveries are previews.'}` : `OpenAI powers classification. ${config.liveDelivery ? 'Configured integrations can deliver after approval.' : 'External delivery is disabled; approval creates previews.'}`;
-  renderRows(); renderDistribution(); renderIntegrations(); renderActivity();
+  $('#metric-total').textContent = r.length;
+  $('#metric-review').textContent = r.filter(item => item.status === 'review').length;
+  $('#metric-high').textContent = r.filter(item => item.analysis?.priority === 'high').length;
+  $('#metric-complete').textContent = r.filter(item => item.status === 'completed').length;
+  $('#inbox-count').textContent = r.filter(item => ['review', 'queued', 'failed', 'partial'].includes(item.status)).length;
+  $('#ai-badge').textContent = config.integrations.openai ? '● AI key configured' : '○ AI setup needed';
+  $('#ai-badge').classList.toggle('unavailable', !config.integrations.openai);
+  $('#setup-notice').classList.toggle('hidden', config.integrations.openai);
+  setView(state.view);
 }
-function renderRows() {
-  const query = $('#search-input').value.toLowerCase(), filter = $('#status-filter').value;
-  const rows = state.requests.filter(r => (filter === 'all' || r.status === filter) && `${r.title} ${r.message} ${r.analysis?.category || ''}`.toLowerCase().includes(query));
-  const body = $('#request-rows'); body.replaceChildren(); $('#empty-state').classList.toggle('hidden', !!rows.length);
-  $('#empty-state h3').textContent = state.requests.length ? 'No matching requests.' : 'Your queue starts here.';
-  $('#empty-state p').textContent = state.requests.length ? 'Try another search or choose a different status.' : 'Add a request or try three synthetic samples to see the workflow in action.';
-  $('#empty-demo-button').classList.toggle('hidden', !!state.requests.length);
-  for (const r of rows) {
-    const tr = el('tr'), subjectCell = el('td'), subject = el('div', 'request-subject');
-    subject.append(el('span', 'request-symbol', r.analysis?.category === 'billing' ? '▧' : r.analysis?.category === 'technical' ? '⌘' : '▤'));
-    const info = el('div'), button = el('button', 'request-title', r.title); button.addEventListener('click', () => showDetail(r.id));
-    info.append(button, el('small', '', `${r.analysis?.route || 'Awaiting classification'} · ${time(r.createdAt)}`)); subject.append(info); subjectCell.append(subject);
-    const priority = el('td'); priority.append(r.analysis ? badge(r.analysis.priority[0].toUpperCase() + r.analysis.priority.slice(1), r.analysis.priority) : el('span', 'subtle', '—'));
-    const status = el('td'); status.append(badge(labels[r.status] || r.status, r.status));
-    const last = el('td'), open = el('button', 'row-open', '›'); open.setAttribute('aria-label', `Open ${r.title}`); open.addEventListener('click', () => showDetail(r.id)); last.append(open); tr.append(subjectCell, priority, status, last); body.append(tr);
+function allEvents() { return state.requests.flatMap(r => r.events.map(e => ({ ...e, requestId: r.id, requestTitle: r.title }))).sort((a, b) => b.at.localeCompare(a.at)); }
+function eventRow(e, compact = false) {
+  const row = node('button', `event-row${compact ? ' compact' : ''}`), dot = node('span', `event-dot ${e.status}`), text = node('span', 'event-copy');
+  text.append(node('strong', '', `${stageNames[e.stage] || e.stage} · ${e.requestTitle}`), node('small', '', e.detail));
+  row.append(dot, text, node('time', '', compact ? shortTime(e.at) : date(e.at)));
+  row.addEventListener('click', () => showDetail(e.requestId)); return row;
+}
+function renderOverview() {
+  const root = $('#review-list'); root.replaceChildren();
+  const reviews = state.requests.filter(r => r.status === 'review').sort((a, b) => (a.analysis?.priority === 'high' ? -1 : 0) - (b.analysis?.priority === 'high' ? -1 : 0)).slice(0, 4);
+  if (!reviews.length) root.append(node('div', 'empty-inline', 'Nothing needs approval right now. New AI analyses will appear here.'));
+  for (const r of reviews) {
+    const row = node('button', 'review-row'), main = node('span', 'review-copy');
+    main.append(node('strong', '', r.title), node('small', '', `${r.analysis.route} · ${r.analysis.summary}`));
+    row.append(pill(r.analysis.priority.toUpperCase(), r.analysis.priority), main, node('span', 'arrow', '↗'));
+    row.onclick = () => showDetail(r.id); root.append(row);
   }
-  $('#shown-count').textContent = `${rows.length} of ${state.requests.length} requests`;
+  const events = $('#recent-events'); events.replaceChildren();
+  const latest = allEvents().slice(0, 3);
+  if (!latest.length) events.append(node('div', 'empty-inline', 'Your first request will start the execution log.'));
+  else latest.forEach(e => events.append(eventRow(e, true)));
 }
-function renderDistribution() {
-  const root = $('#distribution'); root.replaceChildren(); const total = state.requests.filter(r => r.analysis).length;
-  for (const [key, label] of [['technical', 'Technical support'], ['billing', 'Billing operations'], ['general', 'Customer support']]) {
-    const count = state.requests.filter(r => r.analysis?.category === key).length, row = el('div', 'distribution-row'), line = el('div');
-    line.append(el('span', '', label), el('strong', '', String(count))); const bar = el('div', 'bar'), fill = el('i');
-    // Width classes keep the content security policy free of inline styles.
-    fill.className = `bar-${total ? Math.round(count / total * 100) : 0}`; bar.append(fill); row.append(line, bar); root.append(row);
-  }
-}
-function renderIntegrations() {
-  const root = $('#integration-cards'), c = state.config; root.replaceChildren();
-  for (const [key, symbol, name, description] of [['openai', '✦', 'OpenAI', 'Classify requests and generate structured summaries.'], ['slack', '⌘', 'Slack', 'Send reviewed requests to your team’s channel.'], ['sheets', '▦', 'Google Sheets', 'Append an auditable row for each approved request.']]) {
-    const card = el('article', 'card integration-card'); const enabled = c.integrations[key];
-    const status = key === 'openai' ? (c.aiMode === 'demo' ? 'Demo rules active' : enabled ? 'Configured · live AI' : 'API key missing') : enabled && c.liveDelivery ? 'Configured · delivery enabled' : enabled ? 'Configured · preview only' : 'Not configured · preview only';
-    card.append(el('span', 'integration-icon', symbol), el('h2', '', name), el('p', '', description), el('span', `integration-status${enabled ? ' ready' : ''}`, status)); root.append(card);
+function renderRequests() {
+  const query = $('#search-input').value.trim().toLowerCase(), filter = $('#status-filter').value;
+  const records = state.requests.filter(r => (filter === 'all' || r.status === filter) && `${r.title} ${r.message} ${r.analysis?.route || ''}`.toLowerCase().includes(query));
+  const body = $('#request-rows'); body.replaceChildren(); $('#request-count').textContent = `${records.length} of ${state.requests.length}`;
+  $('#request-empty').classList.toggle('hidden', !!records.length);
+  $('#request-empty h3').textContent = state.requests.length ? 'No requests match.' : 'Your inbox is clear.';
+  $('#request-empty p').textContent = state.requests.length ? 'Try a different search or status.' : 'Create a request to begin the AI triage workflow.';
+  $('#empty-create-button').classList.toggle('hidden', !!state.requests.length);
+  for (const r of records) {
+    const tr = node('tr'), title = node('td'), button = node('button', 'table-title', r.title);
+    button.onclick = () => showDetail(r.id); title.append(button, node('small', '', `${r.source} · ${r.id.slice(0, 8)}`));
+    const priority = node('td'); priority.append(r.analysis ? pill(r.analysis.priority, r.analysis.priority) : node('span', 'muted', '—'));
+    const status = node('td'); status.append(pill(statusNames[r.status] || r.status, r.status));
+    const action = node('td'), open = node('button', 'table-open', '↗'); open.setAttribute('aria-label', `Open ${r.title}`); open.onclick = () => showDetail(r.id); action.append(open);
+    tr.append(title, node('td', 'route-cell', r.analysis?.route || 'Awaiting analysis'), priority, status, node('td', 'muted', date(r.createdAt)), action); body.append(tr);
   }
 }
 function renderActivity() {
+  let events = allEvents();
+  if (state.eventFilter === 'error') events = events.filter(e => e.status === 'error');
+  if (state.eventFilter === 'retry') events = events.filter(e => e.stage === 'retry');
+  if (state.eventFilter === 'delivery') events = events.filter(e => ['slack', 'sheets', 'approve'].includes(e.stage));
+  $('#event-count').textContent = `${events.length} events`;
   const root = $('#activity-list'); root.replaceChildren();
-  const events = state.requests.flatMap(r => r.events.map(e => ({ ...e, title: r.title, id: r.id }))).sort((a, b) => b.at.localeCompare(a.at));
-  $('#event-count').textContent = events.length;
-  if (!events.length) root.append(el('div', 'empty-state subtle', 'Execution events will appear after your first request.'));
-  for (const e of events.slice(0, 150)) { const item = el('div', 'activity-item'), info = el('div'); info.append(el('strong', '', `${e.stage[0].toUpperCase()}${e.stage.slice(1)} · ${e.title}`), el('p', '', e.detail), el('small', '', e.id.slice(0, 8))); item.append(el('span', `event-dot ${e.status}`), info, el('time', '', time(e.at))); root.append(item); }
+  if (!events.length) root.append(node('div', 'empty-inline', 'No events in this view yet.'));
+  else events.slice(0, 150).forEach(e => root.append(eventRow(e)));
 }
-function section(title, text) { const s = el('section', 'detail-section'); s.append(el('h3', '', title), el('p', '', text)); return s; }
-function showDetail(id) {
-  state.selected = id; const r = state.requests.find(x => x.id === id); if (!r) return;
-  const root = $('#detail-content'); root.replaceChildren();
-  const head = el('div', 'dialog-heading'), headText = el('div'), close = el('button', 'icon-btn', '×'); close.setAttribute('aria-label', 'Close request'); close.onclick = () => $('#detail-dialog').close();
-  headText.append(el('span', 'eyebrow', `REQUEST ${r.id.slice(0, 8).toUpperCase()}`), el('h2', '', r.title)); head.append(headText, close); root.append(head);
-  const meta = el('div', 'detail-meta'); meta.append(badge(labels[r.status], r.status)); if (r.analysis) meta.append(badge(r.analysis.priority, r.analysis.priority)); root.append(meta, section('Original request · redacted', r.message));
-  if (r.analysis) {
-    const a = r.analysis, box = el('div', 'analysis-box'); box.append(el('h3', '', `✦ ${a.provider === 'openai' ? 'AI analysis' : 'Demo analysis'} → ${a.route}`), el('p', '', a.summary), el('small', '', a.reason)); root.append(box, section('Suggested reply · draft only', a.suggestedReply));
-    root.append(el('div', 'review-note', a.needsHumanReview ? 'Flagged for closer review. Check the classification and draft before approving.' : 'Review the decision before approval. Approval delivers only the summary; the suggested reply is not sent.'));
-    if (Object.keys(r.deliveries).length) {
-      const delivery = el('section', 'detail-section'); delivery.append(el('h3', '', 'Integration delivery'));
-      for (const [target, d] of Object.entries(r.deliveries)) { const line = el('div', 'delivery-row'); line.append(el('span', '', target === 'slack' ? 'Slack' : 'Google Sheets'), el('span', '', `${d.status} · ${d.message || 'In progress'}`)); delivery.append(line); } root.append(delivery);
-    }
-    root.append(el('p', 'subtle', `Provider: ${a.provider}${a.model ? ` · ${a.model}` : ''} · Classification: ${r.durationMs}ms · ${r.source}`));
+function renderConnections() {
+  const config = state.config, root = $('#integration-cards'); root.replaceChildren();
+  const rows = [
+    ['✦', 'OpenAI', 'Classification, priority, summary and draft reply', config.integrations.openai ? 'Configured' : 'API key missing', config.integrations.openai],
+    ['⌁', 'n8n + webhook', 'Authenticated incoming request orchestration', 'Import workflow to connect', false],
+    ['⌘', 'Slack', 'Reviewed summaries to your team channel', config.integrations.slack && config.liveDelivery ? 'Delivery enabled' : config.integrations.slack ? 'Configured · delivery off' : 'Preview only', config.integrations.slack && config.liveDelivery],
+    ['▦', 'Google Sheets', 'One record per approved request', config.integrations.sheets && config.liveDelivery ? 'Delivery enabled' : config.integrations.sheets ? 'Configured · delivery off' : 'Preview only', config.integrations.sheets && config.liveDelivery]
+  ];
+  for (const [icon, name, description, status, ready] of rows) {
+    const card = node('article', 'panel connection-card');
+    card.append(node('span', 'connection-icon', icon), node('h3', '', name), node('p', '', description), node('span', `connection-status${ready ? ' ready' : ''}`, status)); root.append(card);
   }
-  if (r.error) root.append(el('p', 'error-text', r.error));
-  const log = el('section', 'detail-section'); log.append(el('h3', '', 'Execution trace'));
-  for (const e of r.events) { const row = el('div', 'mini-event'); row.append(el('b', '', `${time(e.at)} · ${e.stage} `), document.createTextNode(e.detail)); log.append(row); } root.append(log);
+}
+function detailSection(title, content) { const box = node('section', 'detail-section'); box.append(node('span', 'overline', title), node('p', '', content)); return box; }
+function showDetail(id) {
+  const r = state.requests.find(item => item.id === id); if (!r) return;
+  const root = $('#detail-content'); root.replaceChildren();
+  const head = node('div', 'modal-head'), heading = node('div'), close = node('button', 'icon-button', '×'); close.setAttribute('aria-label', 'Close request'); close.onclick = () => $('#detail-dialog').close();
+  heading.append(node('span', 'overline', `REQUEST ${r.id.slice(0, 8).toUpperCase()}`), node('h2', '', r.title)); head.append(heading, close); root.append(head);
+  const meta = node('div', 'detail-meta'); meta.append(pill(statusNames[r.status] || r.status, r.status), node('span', '', `${r.source} · ${date(r.createdAt)}`)); root.append(meta);
+  root.append(detailSection('ORIGINAL REQUEST · IDENTIFIERS REDACTED', r.message));
+  if (r.analysis) {
+    const a = r.analysis, analysis = node('section', 'analysis-panel');
+    analysis.append(node('span', 'overline', 'OPENAI TRIAGE'), node('h3', '', a.summary));
+    const facts = node('div', 'analysis-facts');
+    for (const [label, value] of [['Category', a.category], ['Priority', a.priority], ['Route', a.route]]) { const fact = node('div'); fact.append(node('small', '', label), node('strong', '', value)); facts.append(fact); }
+    analysis.append(facts, node('p', '', a.reason)); root.append(analysis);
+    root.append(detailSection('SUGGESTED REPLY · DRAFT ONLY', a.suggestedReply));
+    const note = node('p', 'review-note', a.needsHumanReview ? 'Flagged for closer human review. Check the decision before delivery.' : 'Check the decision before approval. The draft reply is never sent to a customer.'); root.append(note);
+  }
+  if (Object.keys(r.deliveries).length) {
+    const section = node('section', 'detail-section'); section.append(node('span', 'overline', 'DELIVERY RESULTS'));
+    for (const [target, result] of Object.entries(r.deliveries)) { const line = node('div', 'delivery-line'); line.append(node('strong', '', target === 'sheets' ? 'Google Sheets' : 'Slack'), node('span', '', `${result.status} · ${result.message || 'Pending'}`)); section.append(line); } root.append(section);
+  }
+  if (r.error) root.append(node('p', 'form-error', r.error));
+  const log = node('section', 'detail-section detail-log'); log.append(node('span', 'overline', 'EXECUTION TRACE'));
+  r.events.forEach(e => { const entry = node('div'); entry.append(node('time', '', shortTime(e.at)), node('strong', '', stageNames[e.stage] || e.stage), node('span', '', e.detail)); log.append(entry); }); root.append(log);
   if (r.status !== 'completed') {
-    const actions = el('div', 'detail-actions'), button = el('button', 'primary', r.analysis ? (r.status === 'partial' ? 'Retry failed deliveries →' : 'Approve & deliver →') : 'Run classification →');
-    const uncertain = Object.values(r.deliveries).some(d => d.status === 'uncertain');
-    if (uncertain) { button.disabled = true; button.textContent = 'Verify uncertain deliveries manually'; }
-    else button.onclick = async () => { button.disabled = true; button.textContent = 'Processing…'; try { const result = await api(`/api/requests/${id}/${r.analysis ? 'approve' : 'classify'}`, { method: 'POST' }); await refresh(); showDetail(id); toast(result.status === 'partial' || result.status === 'failed' ? 'Run needs attention. Check the execution trace.' : 'Request updated.', ['partial', 'failed'].includes(result.status)); } catch (e) { toast(e.message, true); button.disabled = false; } };
+    const actions = node('div', 'modal-actions'), uncertain = Object.values(r.deliveries).some(d => d.status === 'uncertain');
+    const action = r.analysis ? 'approve' : 'classify';
+    const button = node('button', 'primary', uncertain ? 'Verify uncertain delivery manually' : action === 'approve' ? r.status === 'partial' ? 'Retry failed deliveries →' : 'Approve & deliver →' : 'Retry AI classification →');
+    button.disabled = uncertain;
+    button.onclick = async () => { button.disabled = true; button.textContent = 'Working…'; try { const result = await api(`/api/requests/${id}/${action}`, { method: 'POST' }); await load(); showDetail(id); notify(['partial', 'failed'].includes(result.status) ? 'This run needs attention. Check the trace.' : 'Request updated.', ['partial', 'failed'].includes(result.status)); } catch (e) { notify(e.message, true); button.disabled = false; } };
     actions.append(button); root.append(actions);
   }
   if (!$('#detail-dialog').open) $('#detail-dialog').showModal();
 }
-async function loadSamples() {
-  if (state.config?.aiMode !== 'demo') return toast('Sample loading is available in demo mode. Use New request for live AI.', true);
-  const buttons = [$('#demo-button'), $('#empty-demo-button')]; buttons.forEach(b => b.disabled = true);
-  try { for (let i = 0; i < samples.length; i++) await api('/api/requests', { method: 'POST', headers: { 'Idempotency-Key': `flowdesk-sample-${i}` }, body: JSON.stringify(samples[i]) }); await refresh(); setView('overview'); toast('Three synthetic requests analyzed. Select one to review.'); }
-  catch (e) { toast(e.message, true); } finally { buttons.forEach(b => b.disabled = false); }
+async function start() {
+  try { const account = await api('/api/auth/me'); signedIn(account.email); await load(); }
+  catch (e) { signedOut(); if (!e.message.includes('Sign in')) notify(e.message, true); }
 }
-document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
-$('#new-request-button').onclick = () => $('#request-dialog').showModal();
-document.querySelectorAll('.close-dialog').forEach(b => b.onclick = () => $('#request-dialog').close());
-$('#search-input').addEventListener('input', renderRows); $('#status-filter').addEventListener('change', renderRows);
-$('#demo-button').onclick = loadSamples; $('#empty-demo-button').onclick = loadSamples;
-$('#refresh-button').onclick = () => refresh().then(() => toast('Dashboard refreshed.')).catch(e => toast(e.message, true));
-$('#request-form').onsubmit = async e => {
+$('#login-form').addEventListener('submit', async e => {
+  e.preventDefault(); const button = e.target.querySelector('button[type="submit"]'); button.disabled = true; $('#login-error').textContent = '';
+  try { const values = new FormData(e.target); const account = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: values.get('email'), password: values.get('password') }) }); e.target.reset(); signedIn(account.email); await load(); }
+  catch (error) { $('#login-error').textContent = error.message; } finally { button.disabled = false; }
+});
+$('#logout-button').onclick = async () => { try { await api('/api/auth/logout', { method: 'POST' }); } finally { state.requests = []; state.config = null; signedOut(); } };
+document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
+$('#new-request-button').onclick = () => state.config?.integrations.openai ? $('#request-dialog').showModal() : (setView('integrations'), notify('Add OPENAI_API_KEY in .env and restart the server to analyze requests.', true));
+$('#empty-create-button').onclick = () => $('#new-request-button').click();
+document.querySelectorAll('.close-request').forEach(button => button.onclick = () => $('#request-dialog').close());
+$('#refresh-button').onclick = () => load().then(() => notify('Workspace refreshed.')).catch(e => notify(e.message, true));
+$('#search-input').oninput = renderRequests; $('#status-filter').onchange = renderRequests;
+document.querySelectorAll('[data-event-filter]').forEach(button => button.onclick = () => { state.eventFilter = button.dataset.eventFilter; document.querySelectorAll('.filter-chip').forEach(chip => chip.classList.toggle('active', chip === button)); renderActivity(); });
+$('#request-form').addEventListener('submit', async e => {
   e.preventDefault(); const button = $('#submit-button'); button.disabled = true; button.textContent = 'Analyzing…';
-  try { const form = new FormData(e.target); const r = await api('/api/requests', { method: 'POST', body: JSON.stringify({ title: form.get('title'), message: form.get('message') }) }); e.target.reset(); $('#request-dialog').close(); await refresh(); showDetail(r.id); toast(r.status === 'failed' ? 'Classification failed. Check the request trace.' : 'Request analyzed and ready for review.', r.status === 'failed'); }
-  catch (error) { toast(error.message, true); } finally { button.disabled = false; button.textContent = 'Analyze request →'; }
-};
-$('#auth-form').onsubmit = async e => { e.preventDefault(); state.token = new FormData(e.target).get('token'); try { await refresh(); sessionStorage.setItem('flowdesk-token', state.token); e.target.reset(); $('#auth-dialog').close(); $('#auth-error').textContent = ''; } catch { $('#auth-error').textContent = 'Unable to connect. Check the token and server.'; } };
-refresh().catch(e => toast(e.message, true));
+  try { const form = new FormData(e.target), r = await api('/api/requests', { method: 'POST', body: JSON.stringify({ title: form.get('title'), message: form.get('message') }) }); e.target.reset(); $('#request-dialog').close(); await load(); setView('requests'); showDetail(r.id); notify(r.status === 'failed' ? 'AI classification failed. See the execution trace.' : 'Analysis ready for review.', r.status === 'failed'); }
+  catch (error) { notify(error.message, true); } finally { button.disabled = false; button.textContent = 'Analyze request →'; }
+});
+start();

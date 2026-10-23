@@ -1,49 +1,48 @@
 # FlowDesk — AI Workflow Automation Agent
 
-FlowDesk is a support request triage application. It receives requests through a web dashboard or webhook, classifies each request, assigns a priority and team, and prepares a concise summary and draft response. A reviewer can inspect the result before sending the summary to Slack and recording it in Google Sheets.
+FlowDesk is a support operations workspace. An owner signs in, submits or receives a request, reviews an OpenAI classification and summary, then approves its route to Slack and Google Sheets. Each stage is recorded with its outcome and retries.
 
-## Features
+![FlowDesk workflow](https://img.shields.io/badge/workflow-webhook%20%E2%86%92%20AI%20%E2%86%92%20review%20%E2%86%92%20delivery-167552)
 
-- **Request dashboard:** Submit requests, search and filter the inbox, review classifications, and follow each execution step.
-- **AI-assisted triage:** In live mode, OpenAI returns a structured category, priority, summary, routing reason, draft reply, and human review flag.
-- **Human approval:** External delivery begins only after a reviewer approves a classified request. Draft replies are shown for review and are not sent to customers.
-- **Workflow automation:** An importable n8n workflow accepts authenticated webhooks, stores requests, runs classification, and returns the result.
-- **Integrations:** Approved summaries can be posted to a configured Slack channel and appended to Google Sheets.
-- **Execution history:** SQLite stores requests, classifications, delivery outcomes, and retry events. Idempotency keys prevent duplicate webhook submissions.
+## What it does
 
-## How it works
+- **Private workspace:** A single owner signs in with credentials configured on the server. The browser receives a time-limited, signed, HttpOnly session cookie. n8n uses a separate machine token.
+- **Request intake:** Submit requests from the dashboard or an authenticated n8n webhook. Inputs are validated, basic identifiers are redacted, and an idempotency key prevents duplicate intake.
+- **AI triage:** OpenAI returns a validated category, priority, summary, routing reason and draft response. A missing or failed AI service leaves a visible failed request; no rule-based classification is presented as an AI result.
+- **Human review:** The owner inspects the analysis before approving. The draft reply is never sent to a customer automatically.
+- **Delivery:** Approved summaries can go to Slack and Google Sheets. When credentials or live delivery are off, each destination is explicitly marked as a preview.
+- **Execution history:** SQLite stores requests, workflow stages, retry attempts and destination results. A partial run retries only failed destinations; uncertain outcomes require manual verification.
 
-1. A request arrives from the dashboard or the n8n webhook.
-2. The server validates the input and stores it in SQLite.
-3. OpenAI classifies and summarizes the request in live mode. The category maps to technical support, billing operations, or customer support.
-4. A reviewer checks the analysis and approves delivery in the dashboard.
-5. The application sends the approved summary to configured destinations and records the outcome of each step.
+The interface has distinct **Overview**, **Requests**, **Activity**, and **Connections** screens. Overview highlights work awaiting review; Requests is the searchable inbox; Activity is the event log; Connections explains the configured integrations and n8n intake.
 
-The default **demo mode** uses deterministic classification rules, so the dashboard can be explored without API credentials. When external delivery is disabled, Slack and Google Sheets results are clearly marked as previews.
+## Stack and architecture
 
-## Tech stack
-
-| Layer | Technology |
+| Part | Implementation |
 | --- | --- |
-| Dashboard | HTML, CSS, JavaScript |
-| API and persistence | Node.js, SQLite |
-| AI classification | OpenAI structured outputs |
-| Workflow | n8n webhooks and HTTP nodes |
-| Destinations | Slack incoming webhooks, Google Sheets API |
+| Frontend | Responsive HTML, CSS and browser JavaScript |
+| Server and API | Node.js built-in HTTP server and REST endpoints |
+| Storage | Node.js built-in SQLite, persisted under `data/` |
+| AI | OpenAI Chat Completions structured JSON output |
+| Workflow | Importable n8n webhook and HTTP workflow |
+| Destinations | Slack incoming webhook and Google Sheets API |
+
+The server has no external npm dependencies. Docker Compose is optional: it starts FlowDesk and n8n together, keeps their data in volumes, and gives the n8n workflow a stable `http://flowdesk:3000` address. Running FlowDesk directly with Node is enough for the dashboard.
 
 ## Run locally
 
-Requires **Node.js 24 or newer**. No npm dependencies are required.
+Requires Node.js 24 or newer. Create a local `.env` from the example, set `OWNER_EMAIL`, `OWNER_PASSWORD` (12+ characters), `SESSION_SECRET` (32+ random characters), and `OPENAI_API_KEY`, then start:
 
-```bash
-git clone https://github.com/priyanka1vivek/ai-workflow-automation-agent.git
-cd ai-workflow-automation-agent
-cp .env.example .env
-npm start
+```powershell
+Copy-Item .env.example .env
+npm run dev
 ```
 
-On Windows PowerShell, use `Copy-Item .env.example .env` instead of `cp`. Open [http://127.0.0.1:3000](http://127.0.0.1:3000), then select **Try sample requests** to explore the dashboard.
+Generate a suitable secret with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and sign in. `.env` and `data/` are ignored by Git. See [the setup guide](docs/SETUP.md) for n8n, Slack, Sheets and Docker instructions.
 
-To use live AI, set `AI_MODE=live` and `OPENAI_API_KEY` in `.env`. Slack and Google Sheets delivery can be enabled with their respective credentials and `LIVE_DELIVERY=true`. The n8n workflow is available at [`n8n/triage-workflow.json`](n8n/triage-workflow.json).
+## Explore the code
 
-See [API documentation](docs/API.md) for endpoints and request states.
+- [Architecture and code walkthrough](docs/CODE_WALKTHROUGH.md) explains the request lifecycle and the purpose of each module and main function.
+- [API reference](docs/API.md) documents endpoints, authentication and states.
+- [Validation guide](docs/VALIDATION.md) describes the tests and what needs live credentials to verify.
+
+Run `npm test` and `npm run check` to verify the local implementation.

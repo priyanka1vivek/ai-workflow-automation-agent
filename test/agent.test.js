@@ -4,16 +4,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp, envConfig } from '../src/server.js';
-import { redact, validateInput, validateAnalysis, demoClassify, requestWithRetry, deliver } from '../src/agent.js';
+import { redact, validateInput, validateAnalysis, requestWithRetry, deliver } from '../src/agent.js';
 
 test('reject malformed input and redact identifiers before storage', () => {
   assert.throws(() => validateInput({ title: 'x', message: 'short' }));
   assert.throws(() => validateInput({ title: 'Subject', message: 'A valid message', source: 'invalid' }));
   assert.equal(redact('Email test@example.com or call +91 9876543210'), 'Email [email redacted] or call [number redacted]');
-});
-test('demo classification selects billing and flags human review', () => {
-  const a = demoClassify({ title: 'Duplicate charge', message: 'The subscription charged us twice.' });
-  assert.equal(a.category, 'billing'); assert.equal(a.priority, 'high'); assert.equal(a.needsHumanReview, true);
 });
 test('reject invalid AI schema instead of trusting provider output', () => {
   assert.throws(() => validateAnalysis({ category: 'medical', priority: 'urgent' }));
@@ -37,8 +33,8 @@ test('non-idempotent network uncertainty is not blindly retried', async () => {
   assert.equal(calls, 1);
 });
 async function fixture(t, overrides = {}) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'flowdesk-test-')), config = { ...envConfig({ AI_MODE: 'demo', APP_TOKEN: 'a-test-token-for-isolation' }), dataDir, host: '127.0.0.1' };
-  const app = createApp(config, overrides); await new Promise(r => app.server.listen(0, '127.0.0.1', r));
+  const dataDir = mkdtempSync(join(tmpdir(), 'flowdesk-test-')), config = { ...envConfig({ APP_TOKEN: 'a-test-token-for-isolation', OWNER_EMAIL: 'owner@example.test', OWNER_PASSWORD: 'a-secure-test-password', SESSION_SECRET: 'test-secret-at-least-32-characters-long' }), dataDir, host: '127.0.0.1' };
+  const app = createApp(config, { classify: async () => ({ category: 'technical', priority: 'high', summary: 'A dashboard login error is blocking the team.', reason: 'Access is blocked.', suggestedReply: 'The team will investigate.', needsHumanReview: true, route: 'Technical support', provider: 'test-stub', model: null }), ...overrides }); await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await new Promise(r => app.server.close(r)); app.store.close(); rmSync(dataDir, { recursive: true, force: true }); });
   return { app, config, base, async api(path, body, extra = {}) { const response = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json', ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, data: await response.json() }; } };
@@ -48,7 +44,21 @@ test('authentication protects stored requests and config never leaks secrets', a
   const result = await f.api('/api/config'); assert.equal(result.status, 200); assert.ok(!JSON.stringify(result.data).includes(f.config.token));
   assert.equal((await f.api('/api/requests', undefined, { Origin: 'https://evil.test' })).status, 403);
 });
-test('complete demo run persists analysis, requires approval and avoids duplicate side effects', async t => {
+test('owner signs in with an HttpOnly session, sees requests, and signs out', async t => {
+  const f = await fixture(t);
+  const wrong = await fetch(f.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.config.ownerEmail, password: 'wrong-password' }) });
+  assert.equal(wrong.status, 401);
+  const login = await fetch(f.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.config.ownerEmail, password: f.config.ownerPassword }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get('set-cookie'); assert.match(cookie, /HttpOnly; SameSite=Strict/);
+  assert.equal((await fetch(f.base + '/api/auth/me', { headers: { Cookie: cookie } })).status, 200);
+  assert.equal((await fetch(f.base + '/api/requests', { headers: { Cookie: cookie } })).status, 200);
+  assert.equal((await fetch(f.base + '/api/requests', { headers: { Cookie: cookie, Origin: 'https://evil.test' } })).status, 403);
+  const logout = await fetch(f.base + '/api/auth/logout', { method: 'POST', headers: { Cookie: cookie } });
+  assert.match(logout.headers.get('set-cookie'), /Max-Age=0/);
+  assert.equal((await fetch(f.base + '/api/requests')).status, 401);
+});
+test('complete workflow run persists analysis, requires approval and avoids duplicate side effects', async t => {
   let deliveries = 0;
   const f = await fixture(t, { deliver: async () => { deliveries++; return { status: 'simulated', message: 'Preview only' }; } });
   const input = { title: 'Dashboard error', message: 'The dashboard shows an error when I login. Contact me at test@example.com.' };
@@ -70,7 +80,7 @@ test('concurrent approval is rejected and successful destinations are not retrie
   assert.equal((await first).data.status, 'partial');
   assert.equal((await f.api(`/api/requests/${r.id}/approve`, {})).data.status, 'completed'); assert.equal(slack, 1); assert.equal(sheets, 2);
 });
-test('live AI failure is visible, with no hidden demo fallback', async t => {
+test('AI failure is visible, with no fabricated fallback', async t => {
   const f = await fixture(t, { classify: async () => { throw new Error('Provider unavailable'); } });
   const r = (await f.api('/api/requests', { title: 'Test request', message: 'Please review this test request.' })).data;
   assert.equal(r.status, 'failed'); assert.equal(r.analysis, null); assert.equal(r.error, 'Provider unavailable');
@@ -83,5 +93,5 @@ test('uncertain delivery is held instead of resent on another approval', async t
   await f.api(`/api/requests/${r.id}/approve`, {}); assert.equal(calls, 2);
 });
 test('network hosting requires a sufficiently long token', () => {
-  assert.throws(() => createApp({ ...envConfig(), host: '0.0.0.0', token: '' }), /APP_TOKEN/);
+  assert.throws(() => createApp({ ...envConfig({ OWNER_EMAIL: 'owner@example.test', OWNER_PASSWORD: 'a-secure-test-password', SESSION_SECRET: 'test-secret-at-least-32-characters-long' }), host: '0.0.0.0', token: '', dataDir: '/tmp/flowdesk-should-not-exist' }), /APP_TOKEN/);
 });
