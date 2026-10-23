@@ -42,6 +42,7 @@ Generate a suitable secret with `node -e "console.log(require('node:crypto').ran
 ## Explore the code
 
 - [Architecture and code walkthrough](docs/CODE_WALKTHROUGH.md) explains the request lifecycle and the purpose of each module and main function.
+- [Interview guide](docs/INTERVIEW_GUIDE.md) gives a concise project explanation and maps resume claims to the code.
 - [API reference](docs/API.md) documents endpoints, authentication and states.
 - [Validation guide](docs/VALIDATION.md) describes the tests and what needs live credentials to verify.
 

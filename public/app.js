@@ -155,7 +155,8 @@ $('#login-form').addEventListener('submit', async e => {
   try { const values = new FormData(e.target); const account = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: values.get('email'), password: values.get('password') }) }); e.target.reset(); signedIn(account.email); await load(); }
   catch (error) { $('#login-error').textContent = error.message; } finally { button.disabled = false; }
 });
-$('#logout-button').onclick = async () => { try { await api('/api/auth/logout', { method: 'POST' }); } finally { state.requests = []; state.config = null; signedOut(); } };
+async function logout() { try { await api('/api/auth/logout', { method: 'POST' }); } finally { state.requests = []; state.config = null; signedOut(); } }
+$('#logout-button').onclick = logout; $('#mobile-logout-button').onclick = logout;
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => setView(button.dataset.view)));
 $('#new-request-button').onclick = () => state.config?.integrations.openai ? $('#request-dialog').showModal() : (setView('integrations'), notify('Add OPENAI_API_KEY in .env and restart the server to analyze requests.', true));
 $('#empty-create-button').onclick = () => $('#new-request-button').click();

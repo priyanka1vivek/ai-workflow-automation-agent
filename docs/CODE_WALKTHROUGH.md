@@ -81,6 +81,3 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 - **Idempotency and cautious retries:** Repeated webhook events should not create duplicate requests. Remote writes with uncertain outcomes are held for verification rather than sent twice.
 - **Preview labels:** If a destination is not configured, the UI says preview. A resume or demo should never claim a Slack message or Sheet row was sent when it was not.
 
-## What is outside the current scope?
-
-There is one owner and one workspace. There are no customer accounts, RBAC, durable background queue, attachment processing or compliance guarantees. Basic redaction cannot reliably remove all personal information. Live integrations need real credentials and verification; automated tests use stubs so they can run safely and repeatably.
