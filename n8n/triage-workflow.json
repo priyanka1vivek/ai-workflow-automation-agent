@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## FlowDesk \u2014 support triage\n1. Configure Webhook Header Auth (X-Webhook-Token).\n2. Configure Header Auth on both HTTP nodes: Authorization: Bearer <APP_TOKEN>.\n3. Base URL is http://flowdesk:3000 in Docker Compose. Change it if hosted elsewhere.\n4. Publish/activate, then POST synthetic title/message JSON.\n5. Review and approve delivery in the FlowDesk dashboard. No automatic approval.",
+        "content": "## FlowDesk \u2014 support triage\n1. Configure Webhook Header Auth (X-Webhook-Token).\n2. Configure Header Auth on both HTTP nodes: Authorization: Bearer <APP_TOKEN>.\n3. Base URL is http://flowdesk:3000 in Docker Compose. Change it if hosted elsewhere.\n4. Publish/activate, then POST title/message JSON.\n5. Review and approve delivery in the FlowDesk dashboard. No automatic approval.",
         "height": 300,
         "width": 500
       },

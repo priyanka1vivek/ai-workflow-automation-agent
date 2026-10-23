@@ -74,10 +74,10 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 
 ## Why these choices?
 
-- **Built-in Node HTTP and SQLite:** They keep this small service easy to run and expose the routing and state transitions for learning. Express and a separate database would add moving parts without improving the current single-owner use case.
+- **Built-in Node HTTP and SQLite:** They keep this small service easy to run and keep routing and state transitions explicit. The modules remain separated so routing or storage can be changed independently.
 - **n8n as the orchestrator, server as the source of truth:** n8n handles an external webhook; the Node API validates, stores, classifies and tracks the request. This avoids storing the main business state inside n8n execution history.
 - **Human approval:** AI classification can be wrong. A reviewer checks the result before external side effects.
 - **Separate cookie and machine token:** A person signs in on the dashboard; n8n uses a token suitable for HTTP nodes. Neither credential is committed.
 - **Idempotency and cautious retries:** Repeated webhook events should not create duplicate requests. Remote writes with uncertain outcomes are held for verification rather than sent twice.
-- **Preview labels:** If a destination is not configured, the UI says preview. A resume or demo should never claim a Slack message or Sheet row was sent when it was not.
+- **Preview labels:** If a destination is not configured, the UI records a preview result instead of a sent result.
 
