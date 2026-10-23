@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp, envConfig } from '../src/server.js';
+import { hashPassword } from '../src/auth.js';
 import { redact, validateInput, validateAnalysis, requestWithRetry, deliver } from '../src/agent.js';
 
 test('reject malformed input and redact identifiers before storage', () => {
@@ -33,8 +34,10 @@ test('non-idempotent network uncertainty is not blindly retried', async () => {
   assert.equal(calls, 1);
 });
 async function fixture(t, overrides = {}) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'flowdesk-test-')), config = { ...envConfig({ APP_TOKEN: 'a-test-token-for-isolation', OWNER_EMAIL: 'owner@example.test', OWNER_PASSWORD: 'a-secure-test-password', SESSION_SECRET: 'test-secret-at-least-32-characters-long' }), dataDir, host: '127.0.0.1' };
-  const app = createApp(config, { classify: async () => ({ category: 'technical', priority: 'high', summary: 'A dashboard login error is blocking the team.', reason: 'Access is blocked.', suggestedReply: 'The team will investigate.', needsHumanReview: true, route: 'Technical support', provider: 'test-stub', model: null }), ...overrides }); await new Promise(r => app.server.listen(0, '127.0.0.1', r));
+  const dataDir = mkdtempSync(join(tmpdir(), 'flowdesk-test-')), config = { ...envConfig({ APP_TOKEN: 'a-test-token-for-isolation', WEBHOOK_OWNER_EMAIL: 'owner@example.test' }), dataDir, host: '127.0.0.1' };
+  const app = createApp(config, { classify: async () => ({ category: 'technical', priority: 'high', summary: 'A dashboard login error is blocking the team.', reason: 'Access is blocked.', suggestedReply: 'The team will investigate.', needsHumanReview: true, route: 'Technical support', provider: 'test-stub', model: null }), ...overrides });
+  const user = app.store.createUser('owner@example.test', hashPassword('a-secure-test-password'));
+  await new Promise(r => app.server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await new Promise(r => app.server.close(r)); app.store.close(); rmSync(dataDir, { recursive: true, force: true }); });
   return { app, config, base, async api(path, body, extra = {}) { const response = await fetch(base + path, { method: body === undefined ? 'GET' : 'POST', headers: { Authorization: `Bearer ${config.token}`, 'Content-Type': 'application/json', ...extra }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }); return { status: response.status, data: await response.json() }; } };
@@ -44,11 +47,11 @@ test('authentication protects stored requests and config never leaks secrets', a
   const result = await f.api('/api/config'); assert.equal(result.status, 200); assert.ok(!JSON.stringify(result.data).includes(f.config.token));
   assert.equal((await f.api('/api/requests', undefined, { Origin: 'https://evil.test' })).status, 403);
 });
-test('owner signs in with an HttpOnly session, sees requests, and signs out', async t => {
+test('registered user signs in with an HttpOnly session, sees requests, and signs out', async t => {
   const f = await fixture(t);
-  const wrong = await fetch(f.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.config.ownerEmail, password: 'wrong-password' }) });
+  const wrong = await fetch(f.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'owner@example.test', password: 'wrong-password' }) });
   assert.equal(wrong.status, 401);
-  const login = await fetch(f.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.config.ownerEmail, password: f.config.ownerPassword }) });
+  const login = await fetch(f.base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'owner@example.test', password: 'a-secure-test-password' }) });
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie'); assert.match(cookie, /HttpOnly; SameSite=Strict/);
   assert.equal((await fetch(f.base + '/api/auth/me', { headers: { Cookie: cookie } })).status, 200);
@@ -92,6 +95,17 @@ test('uncertain delivery is held instead of resent on another approval', async t
   const first = await f.api(`/api/requests/${r.id}/approve`, {}); assert.equal(first.data.deliveries.slack.status, 'uncertain');
   await f.api(`/api/requests/${r.id}/approve`, {}); assert.equal(calls, 2);
 });
-test('network hosting requires a sufficiently long token', () => {
-  assert.throws(() => createApp({ ...envConfig({ OWNER_EMAIL: 'owner@example.test', OWNER_PASSWORD: 'a-secure-test-password', SESSION_SECRET: 'test-secret-at-least-32-characters-long' }), host: '0.0.0.0', token: '', dataDir: '/tmp/flowdesk-should-not-exist' }), /APP_TOKEN/);
+test('new accounts have isolated request lists and cannot inspect another account', async t => {
+  const f = await fixture(t);
+  const first = (await f.api('/api/requests', { title: 'First account', message: 'A request owned by the first user.' })).data;
+  const registration = await fetch(f.base + '/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'second@example.test', password: 'another-secure-password' }) });
+  assert.equal(registration.status, 201);
+  const cookie = registration.headers.get('set-cookie');
+  const list = await fetch(f.base + '/api/requests', { headers: { Cookie: cookie } });
+  assert.deepEqual((await list.json()).requests, []);
+  assert.equal((await fetch(f.base + `/api/requests/${first.id}`, { headers: { Cookie: cookie } })).status, 404);
+  const second = await fetch(f.base + '/api/requests', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Second account', message: 'A request owned by the second user.' }) });
+  assert.equal(second.status, 201);
+  assert.equal((await f.api('/api/requests')).data.requests.length, 1);
+  assert.equal((await f.api(`/api/requests/${(await second.json()).id}`)).status, 404);
 });

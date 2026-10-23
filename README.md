@@ -1,13 +1,13 @@
 # FlowDesk — AI Workflow Automation Agent
 
-FlowDesk is a support operations workspace. An owner signs in, submits or receives a request, reviews an OpenAI classification and summary, then approves its route to Slack and Google Sheets. Each stage is recorded with its outcome and retries.
+FlowDesk is a support operations workspace. A user creates an account, signs in, submits or receives a request, reviews an OpenAI classification and summary, then approves its route to Slack and Google Sheets. Each stage is recorded with its outcome and retries.
 
 ## What it does
 
-- **Private workspace:** A single owner signs in with credentials configured on the server. The browser receives a time-limited, signed, HttpOnly session cookie. n8n uses a separate machine token.
+- **Private accounts:** Users create accounts in the browser. Password hashes and a persistent session signing secret are stored in SQLite. Each account sees only its own requests; n8n uses a separate machine token tied to a registered account.
 - **Request intake:** Submit requests from the dashboard or an authenticated n8n webhook. Inputs are validated, basic identifiers are redacted, and an idempotency key prevents duplicate intake.
 - **AI triage:** OpenAI returns a validated category, priority, summary, routing reason and draft response. If classification fails, the request stays visible with an error and can be retried.
-- **Human review:** The owner inspects the analysis before approving. The draft reply is never sent to a customer automatically.
+- **Human review:** The signed-in user inspects the analysis before approving. The draft reply is never sent to a customer automatically.
 - **Delivery:** Approved summaries can go to Slack and Google Sheets. When credentials or live delivery are off, each destination is explicitly marked as a preview.
 - **Execution history:** SQLite stores requests, workflow stages, retry attempts and destination results. A partial run retries only failed destinations; uncertain outcomes require manual verification.
 
@@ -28,14 +28,13 @@ The server has no external npm dependencies. Docker Compose is optional: it star
 
 ## Run locally
 
-Requires Node.js 24 or newer. Create a local `.env` from the example, set `OWNER_EMAIL`, `OWNER_PASSWORD` (12+ characters), `SESSION_SECRET` (32+ random characters), and `OPENAI_API_KEY`, then start:
+Requires Node.js 24 or newer. Start the app, open [http://127.0.0.1:3000](http://127.0.0.1:3000), and choose **Create an account**. No preset email or password is needed.
 
 ```powershell
-Copy-Item .env.example .env
 npm run dev
 ```
 
-Generate a suitable secret with `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`. Open [http://127.0.0.1:3000](http://127.0.0.1:3000) and sign in. `.env` and `data/` are ignored by Git. See [the setup guide](docs/SETUP.md) for n8n, Slack, Sheets and Docker instructions.
+For OpenAI classification, create a local `.env` from `.env.example`, fill `OPENAI_API_KEY`, and restart the app. `.env` and `data/` are ignored by Git. See [the setup guide](docs/SETUP.md) for n8n, Slack, Sheets and Docker instructions.
 
 ## Explore the code
 

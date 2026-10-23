@@ -1,12 +1,13 @@
 # FlowDesk API
 
-The dashboard signs in at `POST /api/auth/login` using the owner email and password and receives a signed, HttpOnly, SameSite cookie valid for 12 hours. `GET /api/auth/me` confirms the session; `POST /api/auth/logout` clears it. All request and config endpoints accept that cookie. n8n and external webhook clients use `Authorization: Bearer <APP_TOKEN>` instead. The machine token grants full workspace API access, so keep it private.
+A user creates an account at `POST /api/auth/register`, then signs in at `POST /api/auth/login`. Passwords are stored as salted scrypt hashes. The browser receives a signed, HttpOnly, SameSite cookie valid for 12 hours. `GET /api/auth/me` confirms the session; `POST /api/auth/logout` clears it. Request and config endpoints accept that cookie and scope data to the signed-in account. n8n uses `Authorization: Bearer <APP_TOKEN>` mapped to the registered `WEBHOOK_OWNER_EMAIL`; keep that token private.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
 | GET | `/healthz` | Public readiness response; no workspace data |
-| POST | `/api/auth/login` | Create an owner session |
-| GET | `/api/auth/me` | Return signed-in owner email |
+| POST | `/api/auth/register` | Create an account and session |
+| POST | `/api/auth/login` | Sign in |
+| GET | `/api/auth/me` | Return signed-in email |
 | POST | `/api/auth/logout` | Clear the browser session |
 | GET | `/api/config` | AI model and boolean integration status; no credentials |
 | GET | `/api/requests` | List persisted requests, newest first |

@@ -1,5 +1,5 @@
 const $ = selector => document.querySelector(selector);
-const state = { requests: [], config: null, view: 'overview', eventFilter: 'all', email: '' };
+const state = { requests: [], config: null, view: 'overview', eventFilter: 'all', email: '', authMode: 'login' };
 const statusNames = { queued: 'Queued', processing: 'Processing', review: 'Needs review', delivering: 'Delivering', completed: 'Completed', failed: 'Failed', partial: 'Partial delivery' };
 const stageNames = { receive: 'Received', classify: 'AI classification', route: 'Routed', approve: 'Approved', slack: 'Slack delivery', sheets: 'Google Sheets', retry: 'Retry' };
 const views = {
@@ -14,6 +14,17 @@ function shortTime(value) { return new Date(value).toLocaleTimeString([], { hour
 function notify(message, error = false) { const t = $('#toast'); t.textContent = message; t.className = `toast visible${error ? ' error' : ''}`; clearTimeout(notify.timer); notify.timer = setTimeout(() => t.classList.remove('visible'), 4500); }
 function signedOut() { $('#app-shell').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); }
 function signedIn(email) { state.email = email; $('#login-screen').classList.add('hidden'); $('#app-shell').classList.remove('hidden'); $('#profile-name').textContent = email; $('#profile-avatar').textContent = email[0].toUpperCase(); }
+function setAuthMode(mode) {
+  state.authMode = mode; const register = mode === 'register';
+  $('#auth-kicker').textContent = register ? 'GET STARTED' : 'WELCOME BACK';
+  $('#auth-heading').textContent = register ? 'Create your account' : 'Sign in to FlowDesk';
+  $('#auth-description').textContent = register ? 'Set up your private request workspace.' : 'Your request queue and execution history are waiting.';
+  $('#auth-submit').firstChild.textContent = register ? 'Create account ' : 'Sign in ';
+  $('#auth-switch').textContent = register ? 'Already have an account? Sign in' : 'New here? Create an account';
+  $('#login-form [name="password"]').minLength = register ? 12 : 0;
+  $('#login-form [name="password"]').autocomplete = register ? 'new-password' : 'current-password';
+  $('#login-error').textContent = '';
+}
 async function api(path, options = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...options, headers: { 'Content-Type': 'application/json', ...options.headers } });
   let data; try { data = await response.json(); } catch { throw new Error('The server did not return JSON.'); }
@@ -150,9 +161,10 @@ async function start() {
   try { const account = await api('/api/auth/me'); signedIn(account.email); await load(); }
   catch (e) { signedOut(); if (!e.message.includes('Sign in')) notify(e.message, true); }
 }
+$('#auth-switch').onclick = () => setAuthMode(state.authMode === 'login' ? 'register' : 'login');
 $('#login-form').addEventListener('submit', async e => {
   e.preventDefault(); const button = e.target.querySelector('button[type="submit"]'); button.disabled = true; $('#login-error').textContent = '';
-  try { const values = new FormData(e.target); const account = await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: values.get('email'), password: values.get('password') }) }); e.target.reset(); signedIn(account.email); await load(); }
+  try { const values = new FormData(e.target); const account = await api(`/api/auth/${state.authMode}`, { method: 'POST', body: JSON.stringify({ email: values.get('email'), password: values.get('password') }) }); e.target.reset(); signedIn(account.email); await load(); }
   catch (error) { $('#login-error').textContent = error.message; } finally { button.disabled = false; }
 });
 async function logout() { try { await api('/api/auth/logout', { method: 'POST' }); } finally { state.requests = []; state.config = null; signedOut(); } }

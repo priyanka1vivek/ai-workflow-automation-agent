@@ -1,6 +1,6 @@
 # Code walkthrough and design decisions
 
-FlowDesk is deliberately a small Node application. Each module has one responsibility. The service is suitable for a single owner and low-volume support triage; it is not a multi-tenant ticketing platform.
+FlowDesk is deliberately a small Node application. Each module has one responsibility. The service is a compact support triage application with account-scoped request data.
 
 ## Request lifecycle
 
@@ -10,7 +10,7 @@ Dashboard or n8n webhook
   → redacted request saved in SQLite
   → OpenAI structured classification
   → category maps to a support team
-  → owner inspects analysis and approves
+  → signed-in user inspects analysis and approves
   → configured Slack / Sheets delivery
   → status and each event saved in SQLite
 ```
@@ -21,11 +21,11 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 
 | File | What to explain |
 | --- | --- |
-| `public/index.html` | Semantic login form, application shell, separate screens, request/detail dialogs. It contains no secrets or business decisions. |
+| `public/index.html` | Account creation and login form, application shell, separate screens, request/detail dialogs. It contains no secrets or business decisions. |
 | `public/styles.css` | Responsive design, layout, status colors, form and focus states. Mobile navigation changes layout below 760 px. |
-| `public/app.js` | Browser state and DOM rendering, sign-in, API calls, filtering, detail inspection, approval. Text is inserted with `textContent` to avoid interpreting request data as HTML. |
+| `public/app.js` | Browser state and DOM rendering, registration, sign-in, API calls, filtering, detail inspection, approval. Text is inserted with `textContent` to avoid interpreting request data as HTML. |
 | `src/server.js` | HTTP routing, auth boundaries, input limits, lifecycle orchestration, persistence calls and static asset delivery. |
-| `src/auth.js` | Owner credential comparison, signed 12-hour cookie creation and validation, logout cookie expiry. |
+| `src/auth.js` | Salted password hashing and comparison, signed 12-hour cookies, logout expiry. |
 | `src/agent.js` | Input redaction and validation, AI schema and prompt, OpenAI request, bounded retry, Slack and Sheets adapters. |
 | `src/store.js` | SQLite request table, idempotency lookup, load/save, recovery of interrupted processing. |
 | `n8n/triage-workflow.json` | Authenticated webhook → persist queued request → classify through REST API → respond. The workflow does not auto-approve. |
@@ -37,18 +37,18 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 
 ### `src/server.js`
 
-- `envConfig` reads configuration once. Local hosting uses loopback by default; network hosting also requires a sufficiently long machine token.
-- `createApp` validates owner credentials and session secret before listening. It constructs a SQLite store, in-memory per-request locks, rate-limit buckets and an HTTP server.
+- `envConfig` reads configuration once. Local hosting uses loopback by default; optional n8n machine access is configured separately.
+- `createApp` opens the SQLite store, which holds accounts and a persistent session signing secret. It constructs a SQLite store, in-memory per-request locks, rate-limit buckets and an HTTP server.
 - `event` appends a timestamped stage result and saves the request. This is why Activity can show a trace instead of inferring state from a single status field.
 - `analyze` locks a request, invokes the AI classifier and moves it into `review`. A provider error produces a persisted `failed` request with the error and an event, so a reviewer can retry.
 - `dispatch` requires a stored analysis, records human approval, then delivers to Slack and Sheets one by one. Already `sent` or previewed destinations are skipped on another attempt. An uncertain send is held to avoid accidental duplicates.
-- The HTTP callback serves health and static assets, checks origin and rate limits API requests, handles login/logout, and accepts either a signed browser cookie or the n8n machine token for protected endpoints. The request endpoints call the workflow functions above.
+- The HTTP callback serves health and static assets, checks origin and rate limits API requests, handles registration/login/logout, and accepts either a signed browser cookie or the n8n machine token for protected endpoints. The request endpoints call the workflow functions above.
 
 ### `src/auth.js`
 
-- `checkCredentials` derives comparable password bytes with `scryptSync` and uses a timing-safe comparison. The owner email must also match. The configured password is still a server secret and belongs only in `.env`.
-- `createSession` encodes email, expiry and a nonce and signs the payload with HMAC-SHA256. `readSession` checks signature and expiry on each protected request.
-- `sessionCookie` uses `HttpOnly` so browser JavaScript cannot read it, and `SameSite=Strict` to limit cross-site use. Login attempts are rate limited by IP in `server.js`. This is a single-owner local application, not an account-registration system.
+- `hashPassword` creates a salted scrypt hash at registration. `verifyPassword` compares a login password with the stored hash using a timing-safe comparison.
+- `createSession` encodes account ID, expiry and a nonce and signs the payload with HMAC-SHA256. `readSession` checks signature and expiry on each protected request.
+- `sessionCookie` uses `HttpOnly` so browser JavaScript cannot read it, and `SameSite=Strict` to limit cross-site use. Login attempts are rate limited by IP in `server.js`. The server maps each session to its account and scopes every request query to that account.
 
 ### `src/agent.js`
 
@@ -60,9 +60,9 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 
 ### `src/store.js`
 
-- `openStore` creates `agent.sqlite` under `DATA_DIR` and a requests table with a unique idempotency key. Each complete request, including events, is stored as JSON. SQLite handles persistence without another process.
+- `openStore` creates `agent.sqlite` under `DATA_DIR` with users, settings and account-scoped requests. It stores a persistent session signing secret and a unique idempotency key per account. Each complete request, including events, is stored as JSON. SQLite handles persistence without another process.
 - On startup, interrupted `processing` runs become failed and interrupted `sending` results become uncertain, so the UI does not incorrectly claim success or duplicate a side effect.
-- `list`, `get`, `byKey`, `insert` and `save` are the only storage operations the server needs. For a larger service, these could become normalized tables and a durable job queue.
+- `list`, `get`, `byKey` and `insert` require the authenticated account ID, so one account cannot read another account’s requests. `save` writes a request after the server has loaded it within that scope. For a larger service, these could become normalized tables and a durable job queue.
 
 ### `public/app.js`
 
@@ -70,14 +70,14 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 - `load` fetches config and requests, then `render` updates counts and the current screen.
 - `setView` shows exactly one screen and updates the heading. Overview shows review work, Requests shows the complete searchable inbox, Activity shows events, Connections shows service status and setup.
 - `showDetail` creates a request view from DOM nodes: redacted original request, analysis, draft, delivery results, execution trace and the approve/retry action.
-- Form listeners sign in, sign out, submit new requests and refresh the workspace. Approval is deliberately a separate click from classification.
+- Form listeners create accounts, sign in, sign out, submit new requests and refresh the workspace. Approval is deliberately a separate click from classification.
 
 ## Why these choices?
 
 - **Built-in Node HTTP and SQLite:** They keep this small service easy to run and keep routing and state transitions explicit. The modules remain separated so routing or storage can be changed independently.
 - **n8n as the orchestrator, server as the source of truth:** n8n handles an external webhook; the Node API validates, stores, classifies and tracks the request. This avoids storing the main business state inside n8n execution history.
 - **Human approval:** AI classification can be wrong. A reviewer checks the result before external side effects.
-- **Separate cookie and machine token:** A person signs in on the dashboard; n8n uses a token suitable for HTTP nodes. Neither credential is committed.
+- **Separate cookie and machine token:** Users sign in on the dashboard; n8n uses a token tied to a registered account. Neither credential is committed.
 - **Idempotency and cautious retries:** Repeated webhook events should not create duplicate requests. Remote writes with uncertain outcomes are held for verification rather than sent twice.
 - **Preview labels:** If a destination is not configured, the UI records a preview result instead of a sent result.
 

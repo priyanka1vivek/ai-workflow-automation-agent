@@ -1,21 +1,14 @@
 # Local and integration setup
 
-## 1. Local owner and OpenAI
+## 1. Create an account and connect OpenAI
 
-Install Node.js 24+. Clone the repository and open it in VS Code. In PowerShell:
+Install Node.js 24+, clone the repository, and run `npm run dev`. Open `http://127.0.0.1:3000`, choose **Create an account**, and register with your email and a password of at least 12 characters. Accounts and their requests are stored locally in `data/agent.sqlite`; each account sees its own requests. No account credentials or session secret go in `.env`.
 
-```powershell
-Copy-Item .env.example .env
-node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
-```
-
-Paste the generated secret as `SESSION_SECRET` in `.env`. Set your `OWNER_EMAIL` and a unique `OWNER_PASSWORD` of at least 12 characters. Set `OPENAI_API_KEY` to use real LLM classification. Keep `HOST=127.0.0.1` for local use. Then run `npm run dev`, open `http://127.0.0.1:3000`, and sign in. No `npm install` is needed. The app starts without an OpenAI key to show connection status, but it cannot analyze requests until the key is added and the server restarted.
-
-The password and API credentials remain in `.env` on the server. `.env` and `data/` are excluded from Git. This is a single-owner workspace, not a multi-user SaaS login. Do not put patient or sensitive real-world data into the project; its basic redaction is not comprehensive.
+To analyze requests, create `.env` from the example (`Copy-Item .env.example .env` in PowerShell), set `OPENAI_API_KEY`, and restart the server. The signed-in workspace opens without an API key and shows that AI setup is needed. `data/` and `.env` are excluded from Git. Use non-sensitive requests; basic redaction is not a comprehensive data protection system.
 
 ## 2. n8n webhook
 
-Generate a second random value for `APP_TOKEN` (24+ characters) and restart FlowDesk. Import `n8n/triage-workflow.json` in n8n. Configure its Webhook node with a header authentication credential for incoming callers. Configure both HTTP Request nodes with the HTTP Header Auth credential `Authorization: Bearer <APP_TOKEN>`. The JSON body should contain `title` and `message`. Publish the workflow and POST to the n8n webhook test or production URL. The n8n workflow stores a queued request through the REST API, asks FlowDesk to classify it, and returns the result. You still approve delivery in the dashboard.
+Generate a random `APP_TOKEN` (24+ characters), set `WEBHOOK_OWNER_EMAIL` to an account that you have registered in the browser, and restart FlowDesk. Import `n8n/triage-workflow.json` in n8n. Configure its Webhook node with a header authentication credential for incoming callers. Configure both HTTP Request nodes with the HTTP Header Auth credential `Authorization: Bearer <APP_TOKEN>`. The JSON body should contain `title` and `message`. Publish the workflow and POST to the n8n webhook test or production URL. The n8n workflow stores a queued request through the REST API, asks FlowDesk to classify it, and returns the result. You still approve delivery in the dashboard.
 
 When using Docker Compose, the preconfigured internal URL `http://flowdesk:3000` works. If you run n8n separately, change the two HTTP Request URLs to the address n8n can reach. `127.0.0.1` inside one container does not refer to another container.
 
