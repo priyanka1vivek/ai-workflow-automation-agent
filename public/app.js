@@ -4,8 +4,8 @@ const statusNames = { queued: 'Queued', processing: 'Processing', review: 'Needs
 const stageNames = { receive: 'Received', classify: 'AI classification', route: 'Routed', approve: 'Approved', slack: 'Slack delivery', sheets: 'Google Sheets', retry: 'Retry' };
 const views = {
   overview: ['Overview', 'WORKSPACE SNAPSHOT', 'Incoming requests, ready for review.', 'Track what arrived, what AI routed, and what was delivered.'],
-  requests: ['Requests', 'REQUEST INBOX', 'Every request has a next step.', 'Find a request, inspect its AI analysis, and approve delivery.'],
-  activity: ['Activity', 'EXECUTION HISTORY', 'See what happened, in order.', 'Trace intake, classification, routing, retries and delivery.'],
+  requests: ['Requests', 'REQUEST INBOX', 'Incoming requests', 'Find a request, inspect its AI analysis, and approve delivery.'],
+  activity: ['Activity', 'EXECUTION HISTORY', 'Activity log', 'Trace intake, classification, routing, retries and delivery.'],
   integrations: ['Connections', 'WORKFLOW CONNECTIONS', 'Set up intake, AI and delivery.', 'Invite requesters and connect the services that run this workflow.']
 };
 function node(tag, className, content) { const n = document.createElement(tag); if (className) n.className = className; if (content !== undefined) n.textContent = content; return n; }
