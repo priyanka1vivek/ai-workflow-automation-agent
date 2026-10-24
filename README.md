@@ -1,12 +1,12 @@
 # FlowDesk — AI Workflow Automation Agent
 
-FlowDesk organizes incoming support requests. An authenticated n8n webhook accepts JSON from external systems; people can also submit requests from the web interface. The server uses the OpenAI API to classify each request, set a priority, summarize it, and route it to a support team. A workspace owner reviews the result before approved summaries are sent to Slack and recorded in Google Sheets.
+FlowDesk organizes incoming support requests. An authenticated n8n webhook accepts JSON from external systems; the repository includes a small, separate intake form that demonstrates this path. People can also submit requests from the signed-in FlowDesk interface. The server uses the OpenAI API to classify each request, set a priority, summarize it, and route it to a support team. A workspace owner reviews the result before approved summaries are sent to Slack and recorded in Google Sheets.
 
 ## How it works
 
 ```mermaid
 flowchart TD
-    A["External JSON webhook"] --> B["n8n: receive, store, classify"]
+    A["External form or JSON webhook"] --> B["n8n: receive, store, classify"]
     C["Signed-in requester"] --> D["FlowDesk REST API"]
     B --> D
     D --> E["OpenAI: category, priority, summary, route"]
@@ -14,7 +14,7 @@ flowchart TD
     F --> G["Slack message and Google Sheets row"]
 ```
 
-The two intake paths converge in the same workspace. n8n authenticates the incoming webhook, calls the FlowDesk REST API to persist the request, calls the classification endpoint, and returns the result. A browser submission calls the REST API directly. FlowDesk stores the request and its execution events in SQLite. Human approval is required for delivery; the suggested reply remains a draft and is never sent to the requester.
+The two intake paths converge in the same workspace. The separate [external intake form](external-intake/) sends a request to n8n from its server, keeping the incoming webhook secret out of the browser. Another system can call that same n8n webhook. n8n calls the FlowDesk REST API to persist and classify the request, then returns the result. A signed-in FlowDesk requester calls the REST API directly. FlowDesk stores requests and execution events in SQLite. Human approval is required for delivery; the suggested reply remains a draft and is never sent to the requester.
 
 ## Interface
 
@@ -42,6 +42,7 @@ The Activity view records individual retry attempts and the final outcome. This 
 | Part | Technology and responsibility |
 | --- | --- |
 | Frontend | Responsive HTML, CSS, and browser JavaScript for requester and owner workflows. |
+| External intake | A separate local form and Node sender that forwards JSON to the n8n webhook without revealing its caller secret to the browser. |
 | API and persistence | Node.js HTTP endpoints and SQLite for users, workspaces, requests, settings, and event history. |
 | Authentication | Signed HttpOnly browser sessions; separate, scoped webhook token for n8n. |
 | AI | OpenAI Chat Completions API with a strict JSON schema and server-side output validation. |
@@ -52,6 +53,6 @@ Transient request failures are retried where safe; failures and delivery results
 
 ## Run and explore
 
-Requires Node.js 24 or newer. Run `npm run dev`, visit `http://127.0.0.1:3000`, and create an owner account. The owner can invite a requester and configure integrations from **Connections**. Import [`n8n/triage-workflow.json`](n8n/triage-workflow.json) to enable external webhook intake. Docker Compose is also available. Credentials and local database files are not committed.
+Requires Node.js 24 or newer. Run `npm run dev`, visit `http://127.0.0.1:3000`, and create an owner account. The owner can invite a requester and configure integrations from **Connections**. Import [`n8n/triage-workflow.json`](n8n/triage-workflow.json) to enable external webhook intake. Once n8n is published, run `npm run intake` with a local webhook URL and caller secret to open the separate intake form at `http://127.0.0.1:3001`. Docker Compose is also available. Credentials and local database files are not committed.
 
 For exact connection and local n8n instructions, see [Setup](docs/SETUP.md). For endpoints and states, see [API reference](docs/API.md). The [Code walkthrough](docs/CODE_WALKTHROUGH.md) explains the files and design decisions, and [Validation](docs/VALIDATION.md) describes the tests. Run `npm test` and `npm run check` locally.

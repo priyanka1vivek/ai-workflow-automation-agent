@@ -68,6 +68,23 @@ Invoke-RestMethod -Method Post -Uri $webhookUrl -Headers @{ 'X-Webhook-Token' = 
 
 The n8n webhook is the external trigger in the resume claim. It receives JSON, makes authenticated REST calls to FlowDesk, and receives the AI classification. Human review gates Slack/Sheets delivery. The requester UI provides an additional, easy-to-explain intake path.
 
+### Submit from a separate external form
+
+This repository includes a small local form as an example of an upstream source. It is separate from the signed-in FlowDesk requester screen. Its server sends the webhook request; the browser never receives the incoming n8n secret.
+
+1. Keep FlowDesk (`3000`) and your **published** n8n workflow (`5678`) running. The n8n **Receive request** node must still use its `X-Webhook-Token` Header Auth credential.
+2. Add these lines to your local `.env` in the repository root. Put **the incoming secret you set on the n8n Webhook node** in `N8N_WEBHOOK_SECRET`, not the FlowDesk bearer token:
+
+```dotenv
+N8N_WEBHOOK_URL=http://127.0.0.1:5678/webhook/flowdesk-triage
+N8N_WEBHOOK_SECRET=your-incoming-n8n-header-secret
+```
+
+3. In another VS Code terminal run `npm run intake`. Open `http://127.0.0.1:3001`, enter a subject and details, and select **Send request**.
+4. The form shows the returned request ID and status. Check the new execution in n8n, refresh the FlowDesk owner's Requests page, then approve the request to deliver to Slack and Sheets.
+
+The form listens on your own computer by default. It is a working sample upstream sender, not a claim that a particular company's ticketing system is connected. You can still test the same webhook with another system or with the PowerShell command above.
+
 ## 7. Verify and push your own changes
 
 In VS Code's terminal, run `npm run check` and `npm test`. The automated suite stubs external services; it proves app behavior but cannot prove your private keys or external accounts work. The full live test is steps 2–6 above.

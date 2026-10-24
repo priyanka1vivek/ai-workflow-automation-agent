@@ -29,6 +29,7 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 | `src/agent.js` | Input redaction and validation, AI schema and prompt, OpenAI request, bounded retry, Slack and Sheets adapters. |
 | `src/store.js` | SQLite users, workspaces, scoped requests, encrypted connection values, token hashes, idempotency, and interrupted-run recovery. |
 | `n8n/triage-workflow.json` | Authenticated webhook → persist queued request → classify through REST API → respond. The workflow does not auto-approve. |
+| `external-intake/` | Standalone local support form and Node sender. The server forwards JSON to the published n8n webhook with its caller secret, which is never exposed to browser JavaScript. |
 | `test/agent.test.js` | Behavioral tests for auth, validation, retry, approval, idempotency and failures using external-service stubs. |
 | `.env.example` | Server configuration template; the actual `.env` is ignored by Git. |
 | `Dockerfile`, `docker-compose.yml` | Optional repeatable runtime for the app and n8n with durable volumes and stable internal networking. |
