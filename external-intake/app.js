@@ -15,7 +15,11 @@ form.addEventListener('submit', async event => {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'The request could not be sent.');
     result.classList.remove('error');
-    result.textContent = `Request ${data.id} received. Its status is ${data.status}. A workspace reviewer will check it before delivery.`;
+    const next = data.status === 'review' ? 'Waiting for owner review.'
+      : data.status === 'queued' ? 'Waiting for AI classification.'
+      : data.status === 'failed' ? 'AI classification needs attention.'
+      : `Status: ${data.status}.`;
+    result.textContent = `Request ${data.id.slice(0, 8).toUpperCase()} submitted. ${next}`;
     form.reset();
   } catch (error) {
     result.classList.add('error');
