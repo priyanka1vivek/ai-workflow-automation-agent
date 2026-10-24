@@ -75,6 +75,42 @@ test('complete workflow run persists analysis, requires approval and avoids dupl
   await f.api(`/api/requests/${created.data.id}/approve`, {}); assert.equal(deliveries, 2);
   assert.equal((await f.api('/api/requests')).data.requests.length, 1);
 });
+test('owner can correct analysis or reject before delivery; requester and token cannot', async t => {
+  const sent = [];
+  const f = await fixture(t, { deliver: async (r, target) => { sent.push({ target, summary: r.analysis.summary, route: r.analysis.route }); return { status: 'sent', message: 'Delivered' }; } });
+  const first = (await f.api('/api/requests', { title: 'Wrong classification', message: 'The billing charge needs review by operations.' })).data;
+  const corrected = await f.api(`/api/requests/${first.id}/edit`, { category: 'billing', priority: 'medium', summary: 'A billing charge needs review.', reason: 'The request concerns a charge.', suggestedReply: 'We will review the charge.', needsHumanReview: true });
+  assert.equal(corrected.status, 200);
+  assert.equal(corrected.data.analysis.route, 'Billing operations');
+  assert.equal(corrected.data.analysis.editedByOwner, true);
+  assert.ok(corrected.data.events.some(e => e.stage === 'edit'));
+  assert.equal((await f.api(`/api/requests/${first.id}/edit`, { category: 'wrong' })).status, 400);
+  await f.api(`/api/requests/${first.id}/approve`, {});
+  assert.deepEqual(sent.map(item => item.route), ['Billing operations', 'Billing operations']);
+  assert.equal((await f.api(`/api/requests/${first.id}/edit`, corrected.data.analysis)).status, 409);
+  assert.equal((await f.api(`/api/requests/${first.id}/reject`, { reason: 'Too late now' })).status, 409);
+
+  const second = (await f.api('/api/requests', { title: 'Out of scope', message: 'This is an unrelated request for the team.' })).data;
+  assert.equal((await f.api(`/api/requests/${second.id}/reject`, null)).status, 400);
+  const rejected = await f.api(`/api/requests/${second.id}/reject`, { reason: 'This belongs elsewhere. Contact test@example.com.' });
+  assert.equal(rejected.data.status, 'rejected');
+  assert.match(rejected.data.rejectionReason, /\[email redacted\]/);
+  assert.ok(rejected.data.events.some(e => e.stage === 'reject'));
+  assert.equal((await f.api(`/api/requests/${second.id}/approve`, {})).status, 409);
+  assert.equal((await f.api(`/api/requests/${second.id}/classify`, {})).status, 409);
+  assert.equal(sent.length, 2);
+
+  const inviteCode = (await f.api('/api/workspace')).data.inviteCode;
+  const registration = await fetch(f.base + '/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'review-requester@example.test', password: 'another-secure-password', inviteCode }) });
+  const cookie = registration.headers.get('set-cookie');
+  for (const action of ['edit', 'reject']) {
+    const denied = await fetch(f.base + `/api/requests/${second.id}/${action}`, { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'Please reject' }) });
+    assert.equal(denied.status, 403);
+  }
+  const token = (await f.api('/api/workspace/token', {})).data.token;
+  const denied = await fetch(f.base + `/api/requests/${second.id}/reject`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: 'Please reject' }) });
+  assert.equal(denied.status, 403);
+});
 test('concurrent approval is rejected and successful destinations are not retried', async t => {
   let release, gate = new Promise(r => release = r), slack = 0, sheets = 0;
   const f = await fixture(t, { deliver: async (r, target) => { if (target === 'slack') { slack++; await gate; return { status: 'sent', message: 'Delivered' }; } sheets++; if (sheets === 1) throw new Error('Service unavailable'); return { status: 'sent', message: 'Delivered' }; } });

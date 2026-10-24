@@ -18,6 +18,8 @@ A user creates an account at `POST /api/auth/register`, then signs in at `POST /
 | POST | `/api/requests` | Create and classify a request, or queue it if no AI key is configured |
 | POST | `/api/webhook` | Create and classify an externally received request |
 | POST | `/api/requests/:id/classify` | Owner or scoped webhook: classify a queued or failed request |
+| POST | `/api/requests/:id/edit` | Owner only: correct category, priority, summary, reason, draft reply and review flag before approval; route is recomputed |
+| POST | `/api/requests/:id/reject` | Owner only: reject an undelivered request with a reason |
 | POST | `/api/requests/:id/approve` | Owner only: approve and deliver a classified request |
 
 A request body:
@@ -28,6 +30,6 @@ A request body:
 
 `source` is `dashboard`, `webhook` or `n8n`. `autoProcess:false` stores a queued request for the n8n classify step. `/api/webhook` marks the source as `webhook`. Supply an `Idempotency-Key` header for repeated events: matching content returns the original request, conflicting content returns 409. Request JSON is capped at 20 KB and message text at 5,000 characters.
 
-The states are `queued → processing → review → delivering → completed`; classification failure becomes `failed`, and destination failure or uncertainty becomes `partial`. Approval requires a stored analysis and is never automatic. Repeated approval skips already sent or previewed destinations; uncertain delivery is held for manual verification. An owner’s approval sends the summary only, never the suggested reply.
+The states are `queued → processing → review → delivering → completed`; classification failure becomes `failed`, and destination failure or uncertainty becomes `partial`. Before approval, the owner can edit a request in `review` or reject a request in `queued`, `review` or `failed`. A rejected request is terminal and never delivered. Owner corrections are logged and category changes recompute the team route. Approval requires a stored analysis and is never automatic. Repeated approval skips already sent or previewed destinations; uncertain delivery is held for manual verification. An owner’s approval sends the summary only, never the suggested reply.
 
 Errors: 400 invalid input; 401 missing or expired session/token; 403 cross-origin request; 404 missing resource; 409 concurrency or idempotency conflict; 413 oversized body; 415 non-JSON input; 429 rate limit. Responses use JSON with `{ "error": "..." }` on failure.

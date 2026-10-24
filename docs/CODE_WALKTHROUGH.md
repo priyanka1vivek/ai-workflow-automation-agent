@@ -42,7 +42,8 @@ The frontend never calls OpenAI, Slack or Google directly. It calls same-origin 
 - `createApp` opens the SQLite store, which holds accounts and a persistent session signing secret. It constructs a SQLite store, in-memory per-request locks, rate-limit buckets and an HTTP server.
 - `event` appends a timestamped stage result and saves the request. This is why Activity can show a trace instead of inferring state from a single status field.
 - `analyze` locks a request, invokes the AI classifier and moves it into `review`. A provider error produces a persisted `failed` request with the error and an event, so a reviewer can retry.
-- `dispatch` requires a stored analysis, records human approval, then delivers to Slack and Sheets one by one. Already `sent` or previewed destinations are skipped on another attempt. An uncertain send is held to avoid accidental duplicates.
+- `editAnalysis` validates an owner's corrections while a request is awaiting review, then recomputes the route from the corrected category. `rejectRequest` stores the owner's reason and blocks later classification or approval.
+- `dispatch` requires a stored analysis, records human approval, then delivers to Slack and Sheets one by one. Rejected requests are blocked. Already `sent` or previewed destinations are skipped on another attempt. An uncertain send is held to avoid accidental duplicates.
 - The HTTP callback serves health and static assets, checks origin and rate limits API requests, handles registration/login/logout, and accepts a signed browser cookie or a scoped n8n token. Only owners can change connections and approve delivery; webhook tokens can intake/classify but cannot approve. The request endpoints call the workflow functions above.
 
 ### `src/auth.js`

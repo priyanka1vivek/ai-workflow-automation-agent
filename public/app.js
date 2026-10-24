@@ -1,7 +1,7 @@
 const $ = selector => document.querySelector(selector);
 const state = { requests: [], config: null, workspace: null, role: 'owner', view: 'overview', eventFilter: 'all', email: '', authMode: 'login' };
-const statusNames = { queued: 'Queued', processing: 'Processing', review: 'Needs review', delivering: 'Delivering', completed: 'Completed', failed: 'Failed', partial: 'Partial delivery' };
-const stageNames = { receive: 'Received', classify: 'AI classification', route: 'Routed', approve: 'Approved', slack: 'Slack delivery', sheets: 'Google Sheets', retry: 'Retry' };
+const statusNames = { queued: 'Queued', processing: 'Processing', review: 'Needs review', delivering: 'Delivering', completed: 'Completed', failed: 'Failed', partial: 'Partial delivery', rejected: 'Rejected' };
+const stageNames = { receive: 'Received', classify: 'AI classification', route: 'Routed', edit: 'Owner correction', reject: 'Rejected', approve: 'Approved', slack: 'Slack delivery', sheets: 'Google Sheets', retry: 'Retry' };
 const views = {
   overview: ['Overview', 'WORKSPACE SNAPSHOT', 'Incoming requests, ready for review.', 'Track what arrived, what AI routed, and what was delivered.'],
   requests: ['Requests', 'REQUEST INBOX', 'Incoming requests', 'Find a request, inspect its AI analysis, and approve delivery.'],
@@ -141,13 +141,14 @@ function showDetail(id) {
   root.append(detailSection('ORIGINAL REQUEST · IDENTIFIERS REDACTED', r.message));
   if (r.analysis) {
     const a = r.analysis, analysis = node('section', 'analysis-panel');
-    analysis.append(node('span', 'overline', 'OPENAI TRIAGE'), node('h3', '', a.summary));
+    analysis.append(node('span', 'overline', a.editedByOwner ? 'OPENAI TRIAGE · OWNER CORRECTED' : 'OPENAI TRIAGE'), node('h3', '', a.summary));
     const facts = node('div', 'analysis-facts');
     for (const [label, value] of [['Category', a.category], ['Priority', a.priority], ['Route', a.route]]) { const fact = node('div'); fact.append(node('small', '', label), node('strong', '', value)); facts.append(fact); }
     analysis.append(facts, node('p', '', a.reason)); root.append(analysis);
     root.append(detailSection('SUGGESTED REPLY · DRAFT ONLY', a.suggestedReply));
     const note = node('p', 'review-note', a.needsHumanReview ? 'Flagged for closer human review. Check the decision before delivery.' : 'Check the decision before approval. The draft reply is never sent to a customer.'); root.append(note);
   }
+  if (r.rejectionReason) root.append(detailSection('REJECTION REASON', r.rejectionReason));
   if (Object.keys(r.deliveries).length) {
     const section = node('section', 'detail-section'); section.append(node('span', 'overline', 'DELIVERY RESULTS'));
     for (const [target, result] of Object.entries(r.deliveries)) { const line = node('div', 'delivery-line'); line.append(node('strong', '', target === 'sheets' ? 'Google Sheets' : 'Slack'), node('span', '', `${result.status} · ${result.message || 'Pending'}`)); section.append(line); } root.append(section);
@@ -155,15 +156,42 @@ function showDetail(id) {
   if (r.error) root.append(node('p', 'form-error', r.error));
   const log = node('section', 'detail-section detail-log'); log.append(node('span', 'overline', 'EXECUTION TRACE'));
   r.events.forEach(e => { const entry = node('div'); entry.append(node('time', '', shortTime(e.at)), node('strong', '', stageNames[e.stage] || e.stage), node('span', '', e.detail)); log.append(entry); }); root.append(log);
-  if (r.status !== 'completed' && state.role === 'owner') {
+  if (!['completed', 'rejected'].includes(r.status) && state.role === 'owner') {
     const actions = node('div', 'modal-actions'), uncertain = Object.values(r.deliveries).some(d => d.status === 'uncertain');
     const action = r.analysis ? 'approve' : 'classify';
     const button = node('button', 'primary', uncertain ? 'Verify uncertain delivery manually' : action === 'approve' ? r.status === 'partial' ? 'Retry failed deliveries →' : 'Approve & deliver →' : 'Retry AI classification →');
     button.disabled = uncertain;
     button.onclick = async () => { button.disabled = true; button.textContent = 'Working…'; try { const result = await api(`/api/requests/${id}/${action}`, { method: 'POST' }); await load(); showDetail(id); notify(['partial', 'failed'].includes(result.status) ? 'This run needs attention. Check the trace.' : 'Request updated.', ['partial', 'failed'].includes(result.status)); } catch (e) { notify(e.message, true); button.disabled = false; } };
-    actions.append(button); root.append(actions);
+    actions.append(button);
+    if (r.status === 'review' && r.analysis && !r.approvedAt) {
+      const edit = node('button', 'secondary', 'Edit analysis');
+      edit.onclick = () => openEdit(id);
+      actions.prepend(edit);
+    }
+    if (['queued', 'review', 'failed'].includes(r.status) && !r.approvedAt) {
+      const reject = node('button', 'secondary', 'Reject request');
+      reject.onclick = () => openReject(id);
+      actions.prepend(reject);
+    }
+    root.append(actions);
   }
   if (!$('#detail-dialog').open) $('#detail-dialog').showModal();
+}
+let reviewRequestId = null;
+function openEdit(id) {
+  const r = state.requests.find(item => item.id === id), form = $('#edit-form');
+  if (!r?.analysis) return;
+  reviewRequestId = id;
+  for (const key of ['category', 'priority', 'summary', 'reason', 'suggestedReply']) form.elements[key].value = r.analysis[key];
+  form.elements.needsHumanReview.checked = r.analysis.needsHumanReview;
+  $('#edit-error').textContent = '';
+  $('#edit-dialog').showModal();
+}
+function openReject(id) {
+  reviewRequestId = id;
+  $('#reject-form').reset();
+  $('#reject-error').textContent = '';
+  $('#reject-dialog').showModal();
 }
 async function start() {
   try { const account = await api('/api/auth/me'); signedIn(account); await load(); }
@@ -201,6 +229,22 @@ $('#request-form').addEventListener('submit', async e => {
   e.preventDefault(); const button = $('#submit-button'); button.disabled = true; button.textContent = 'Submitting…';
   try { const form = new FormData(e.target), r = await api('/api/requests', { method: 'POST', body: JSON.stringify({ title: form.get('title'), message: form.get('message') }) }); e.target.reset(); $('#request-dialog').close(); await load(); setView('requests'); showDetail(r.id); notify(r.status === 'queued' ? 'Request received. The owner can connect AI and classify it.' : r.status === 'failed' ? 'AI classification failed. The owner can retry.' : 'Request sent for owner review.', r.status === 'failed'); }
   catch (error) { notify(error.message, true); } finally { button.disabled = false; button.textContent = 'Submit now →'; }
+});
+document.querySelectorAll('.close-review').forEach(button => button.onclick = () => button.closest('dialog').close());
+$('#edit-form').addEventListener('submit', async event => {
+  event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button[type="submit"]');
+  button.disabled = true; $('#edit-error').textContent = '';
+  const fields = new FormData(form);
+  const body = Object.fromEntries(['category', 'priority', 'summary', 'reason', 'suggestedReply'].map(key => [key, fields.get(key)]));
+  body.needsHumanReview = form.elements.needsHumanReview.checked;
+  try { await api(`/api/requests/${reviewRequestId}/edit`, { method: 'POST', body: JSON.stringify(body) }); $('#edit-dialog').close(); await load(); showDetail(reviewRequestId); notify('Analysis corrected. Review it before approval.'); }
+  catch (error) { $('#edit-error').textContent = error.message; } finally { button.disabled = false; }
+});
+$('#reject-form').addEventListener('submit', async event => {
+  event.preventDefault(); const form = event.currentTarget, button = form.querySelector('button[type="submit"]');
+  button.disabled = true; $('#reject-error').textContent = '';
+  try { await api(`/api/requests/${reviewRequestId}/reject`, { method: 'POST', body: JSON.stringify({ reason: new FormData(form).get('reason') }) }); $('#reject-dialog').close(); await load(); showDetail(reviewRequestId); notify('Request rejected. No delivery was sent.'); }
+  catch (error) { $('#reject-error').textContent = error.message; } finally { button.disabled = false; }
 });
 document.querySelectorAll('[data-connection]').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault(); const button = form.querySelector('button'); button.disabled = true;

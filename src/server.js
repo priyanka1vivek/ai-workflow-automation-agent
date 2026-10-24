@@ -3,7 +3,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { resolve, dirname, join } from 'node:path';
-import { classify, deliver, validateInput, integrationConfigured } from './agent.js';
+import { classify, deliver, validateInput, validateAnalysis, redact, integrationConfigured } from './agent.js';
 import { openStore } from './store.js';
 import { hashPassword, verifyPassword, createSession, readSession, sessionCookie, clearSessionCookie } from './auth.js';
 
@@ -32,7 +32,8 @@ export function createApp(config, overrides = {}) {
   async function locked(id, fn) { if (locks.has(id)) throw fail(409, 'This request is already processing.'); locks.add(id); try { return await fn(); } finally { locks.delete(id); } }
   async function analyze(id, user) {
     return locked(id, async () => {
-      const r = get(id, user); if (r.analysis) return r;
+      const r = get(id, user); if (r.status === 'rejected') throw fail(409, 'Rejected requests cannot be classified.');
+      if (r.analysis) return r;
       const connections = effectiveConfig(user);
       if (!connections.openaiKey && !overrides.classify) throw fail(409, 'Connect OpenAI before classifying this request.');
       r.status = 'processing'; event(r, 'classify', 'Classifying request and validating structured output.', 'running');
@@ -46,7 +47,8 @@ export function createApp(config, overrides = {}) {
   }
   async function dispatch(id, user) {
     return locked(id, async () => {
-      const r = get(id, user); if (!r.analysis) throw fail(409, 'Classify the request before approval.');
+      const r = get(id, user); if (r.status === 'rejected') throw fail(409, 'Rejected requests cannot be approved.');
+      if (!r.analysis) throw fail(409, 'Classify the request before approval.');
       const connections = effectiveConfig(user);
       if (r.status === 'completed') return r;
       r.approvedAt ||= new Date().toISOString(); r.status = 'delivering'; event(r, 'approve', 'Human approved routing and integration delivery.');
@@ -58,6 +60,28 @@ export function createApp(config, overrides = {}) {
         event(r, target, r.deliveries[target].message, ['failed', 'uncertain'].includes(r.deliveries[target].status) ? 'error' : 'ok');
       }
       r.status = Object.values(r.deliveries).some(d => ['failed', 'uncertain'].includes(d.status)) ? 'partial' : 'completed'; store.save(r); return r;
+    });
+  }
+  async function editAnalysis(id, user, body) {
+    return locked(id, async () => {
+      const r = get(id, user);
+      if (r.status !== 'review' || !r.analysis || r.approvedAt || Object.keys(r.deliveries).length) throw fail(409, 'Only an analysis awaiting review can be edited.');
+      let corrected;
+      try { corrected = validateAnalysis(body); } catch { throw fail(400, 'Enter a valid category, priority, summary, reason and draft reply.'); }
+      r.analysis = { ...r.analysis, ...corrected, editedByOwner: true };
+      event(r, 'edit', 'Owner corrected the AI analysis before approval.');
+      return r;
+    });
+  }
+  async function rejectRequest(id, user, body) {
+    return locked(id, async () => {
+      const r = get(id, user);
+      if (!['queued', 'review', 'failed'].includes(r.status) || r.approvedAt || Object.keys(r.deliveries).length) throw fail(409, 'This request can no longer be rejected.');
+      if (!body || typeof body.reason !== 'string' || body.reason.trim().length < 5 || body.reason.length > 500) throw fail(400, 'Enter a reason of 5–500 characters.');
+      r.rejectionReason = redact(body.reason.trim());
+      r.rejectedAt = new Date().toISOString(); r.status = 'rejected';
+      event(r, 'reject', `Owner rejected request: ${r.rejectionReason}`);
+      return r;
     });
   }
   const server = createServer(async (req, res) => {
@@ -160,7 +184,7 @@ export function createApp(config, overrides = {}) {
           store.insert(r, key, user); event(r, 'receive', 'Request received, validated and basic identifiers redacted.');
           return send(res, 201, body.autoProcess === false || (!effectiveConfig(user).openaiKey && !overrides.classify) ? r : await analyze(r.id, user));
         }
-        const match = path.match(/^\/api\/requests\/([a-f0-9-]+)(?:\/(classify|approve))?$/);
+        const match = path.match(/^\/api\/requests\/([a-f0-9-]+)(?:\/(classify|approve|edit|reject))?$/);
         if (match && req.method === 'GET' && !match[2]) return send(res, 200, get(match[1], user));
         if (match && req.method === 'POST' && match[2] === 'classify') {
           if (user.role !== 'owner') throw fail(403, 'Only the owner can retry classification.');
@@ -169,6 +193,14 @@ export function createApp(config, overrides = {}) {
         if (match && req.method === 'POST' && match[2] === 'approve') {
           if (user.role !== 'owner' || machine) throw fail(403, 'Only the owner can approve delivery.');
           return send(res, 200, await dispatch(match[1], user));
+        }
+        if (match && req.method === 'POST' && match[2] === 'edit') {
+          if (user.role !== 'owner' || machine) throw fail(403, 'Only the owner can edit analysis.');
+          return send(res, 200, await editAnalysis(match[1], user, await readBody(req)));
+        }
+        if (match && req.method === 'POST' && match[2] === 'reject') {
+          if (user.role !== 'owner' || machine) throw fail(403, 'Only the owner can reject requests.');
+          return send(res, 200, await rejectRequest(match[1], user, await readBody(req)));
         }
         throw fail(404, 'API endpoint not found.');
       }

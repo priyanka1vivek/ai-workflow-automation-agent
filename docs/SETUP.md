@@ -41,7 +41,7 @@ Classification calls the OpenAI API from the Node server; the browser never send
 ## 5. Enable real delivery
 
 1. As owner, confirm both Slack and Google Sheets cards show **Configured**. In **Connections → Send real deliveries**, check **Enable real delivery after approval** and select **Save delivery setting**.
-2. Open a request showing **Needs review**. Read its summary, category, priority, reason, and suggested draft. Select **Approve & deliver**.
+2. Open a request showing **Needs review**. Read its summary, category, priority, reason, and suggested draft. If needed, select **Edit analysis** to correct those fields before approval, or **Reject request** with a reason to stop it. Otherwise select **Approve & deliver**.
 3. In the request detail, inspect **Delivery results**. Confirm the message in your Slack channel and a new row in the Sheet. The draft reply is never sent as a customer message.
 4. If real delivery is off or a destination is unconfigured, its result explicitly says **Preview only**. A failed destination can be retried without resending a previously successful destination. An uncertain network outcome is held for manual verification to avoid duplicates.
 

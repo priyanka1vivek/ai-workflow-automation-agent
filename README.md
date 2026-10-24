@@ -1,6 +1,6 @@
 # FlowDesk — AI Workflow Automation Agent
 
-FlowDesk organizes incoming support requests. An authenticated n8n webhook accepts JSON from external systems; the repository includes a small, separate intake form that demonstrates this path. People can also submit requests from the signed-in FlowDesk interface. The server uses the OpenAI API to classify each request, set a priority, summarize it, and route it to a support team. A workspace owner reviews the result before approved summaries are sent to Slack and recorded in Google Sheets.
+FlowDesk organizes incoming support requests. An authenticated n8n webhook accepts JSON from external systems; the repository includes a small, separate intake form that demonstrates this path. People can also submit requests from the signed-in FlowDesk interface. The server uses the OpenAI API to classify each request, set a priority, summarize it, and route it to a support team. A workspace owner can correct the analysis, reject the request, or approve delivery to Slack and Google Sheets.
 
 ## How it works
 
@@ -14,14 +14,14 @@ flowchart TD
     F --> G["Slack message and Google Sheets row"]
 ```
 
-The two intake paths converge in the same workspace. The separate [external intake form](external-intake/) sends a request to n8n from its server, keeping the incoming webhook secret out of the browser. Another system can call that same n8n webhook. n8n calls the FlowDesk REST API to persist and classify the request, then returns the result. A signed-in FlowDesk requester calls the REST API directly. FlowDesk stores requests and execution events in SQLite. Human approval is required for delivery; the suggested reply remains a draft and is never sent to the requester.
+The two intake paths converge in the same workspace. The separate [external intake form](external-intake/) sends a request to n8n from its server, keeping the incoming webhook secret out of the browser. Another system can call that same n8n webhook. n8n calls the FlowDesk REST API to persist and classify the request, then returns the result. A signed-in FlowDesk requester calls the REST API directly. FlowDesk stores requests and execution events in SQLite. The owner can correct the AI fields before approval or reject a request with a reason. Only an approved request can be delivered; the suggested reply remains a draft and is never sent to the requester.
 
 ## Interface
 
 | View | Purpose |
 | --- | --- |
 | **Overview** | Shows request totals, high-priority work, the owner’s review queue, and recent activity. |
-| **Requests** | Lets requesters submit work and track their own requests. Owners can search the workspace inbox, inspect AI reasoning and the execution trace, and approve delivery. |
+| **Requests** | Lets requesters submit work and track their own requests. Owners can inspect AI reasoning, correct an analysis, reject with a reason, or approve delivery. |
 | **Activity** | Records receipt, AI classification, routing, approval, retries, and destination outcomes in time order. |
 | **Connections** | Lets the owner configure OpenAI, Slack, Google Sheets, and a scoped n8n token. Saved secret values are not returned to the browser. |
 
