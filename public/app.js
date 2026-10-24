@@ -169,6 +169,19 @@ async function start() {
   try { const account = await api('/api/auth/me'); signedIn(account); await load(); }
   catch (e) { signedOut(); if (!e.message.includes('Sign in')) notify(e.message, true); }
 }
+function setSidebarCollapsed(collapsed) {
+  $('#app-shell').classList.toggle('sidebar-collapsed', collapsed);
+  const button = $('#sidebar-toggle');
+  button.textContent = collapsed ? '›' : '‹';
+  button.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  button.setAttribute('title', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  button.setAttribute('aria-expanded', String(!collapsed));
+  try { localStorage.setItem('flowdesk-sidebar-collapsed', collapsed ? '1' : '0'); } catch { /* Keep the control usable without storage. */ }
+}
+let sidebarWasCollapsed = false;
+try { sidebarWasCollapsed = localStorage.getItem('flowdesk-sidebar-collapsed') === '1'; } catch { /* Default to expanded. */ }
+setSidebarCollapsed(sidebarWasCollapsed);
+$('#sidebar-toggle').onclick = () => setSidebarCollapsed(!$('#app-shell').classList.contains('sidebar-collapsed'));
 $('#auth-switch').onclick = () => setAuthMode(state.authMode === 'login' ? 'register' : 'login');
 $('#login-form').addEventListener('submit', async e => {
   e.preventDefault(); const button = e.target.querySelector('button[type="submit"]'); button.disabled = true; $('#login-error').textContent = '';
