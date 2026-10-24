@@ -62,7 +62,8 @@ function render() {
   $('#ai-badge').textContent = config.integrations.openai ? '● AI key configured' : '○ AI setup needed';
   $('#ai-badge').classList.toggle('unavailable', !config.integrations.openai);
   $('#setup-notice').classList.toggle('hidden', config.integrations.openai || state.role !== 'owner');
-  $('#new-request-button').textContent = state.role === 'owner' ? '＋  New request' : '＋  Submit request';
+  $('#new-request-button').classList.toggle('hidden', state.role === 'owner');
+  $('#new-request-button').textContent = '＋  Submit request';
   $('#metric-review').parentElement.firstElementChild.textContent = state.role === 'owner' ? 'NEEDS YOUR REVIEW' : 'AWAITING REVIEW';
   setView(state.view);
 }
@@ -186,7 +187,7 @@ document.querySelectorAll('[data-event-filter]').forEach(button => button.onclic
 $('#request-form').addEventListener('submit', async e => {
   e.preventDefault(); const button = $('#submit-button'); button.disabled = true; button.textContent = 'Submitting…';
   try { const form = new FormData(e.target), r = await api('/api/requests', { method: 'POST', body: JSON.stringify({ title: form.get('title'), message: form.get('message') }) }); e.target.reset(); $('#request-dialog').close(); await load(); setView('requests'); showDetail(r.id); notify(r.status === 'queued' ? 'Request received. The owner can connect AI and classify it.' : r.status === 'failed' ? 'AI classification failed. The owner can retry.' : 'Request sent for owner review.', r.status === 'failed'); }
-  catch (error) { notify(error.message, true); } finally { button.disabled = false; button.textContent = 'Submit request →'; }
+  catch (error) { notify(error.message, true); } finally { button.disabled = false; button.textContent = 'Submit now →'; }
 });
 document.querySelectorAll('[data-connection]').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault(); const button = form.querySelector('button'); button.disabled = true;
