@@ -158,7 +158,23 @@ test('requester joins owner workspace, submits, sees only own work, and cannot a
   assert.equal((await f.api('/api/requests')).data.requests[0].id, r.id);
   const denied = await fetch(f.base + `/api/requests/${r.id}/approve`, { method: 'POST', headers: { Cookie: cookie } });
   assert.equal(denied.status, 403);
+  const corrected = await f.api(`/api/requests/${r.id}/edit`, { category: 'billing', priority: 'medium', summary: 'Reviewer corrected the summary.', reason: 'Billing access is affected.', suggestedReply: 'We will investigate.', needsHumanReview: true });
+  assert.equal(corrected.status, 200);
+  const requesterRead = async id => (await (await fetch(f.base + `/api/requests/${id}`, { headers: { Cookie: cookie } })).json());
+  const visibleCorrection = await requesterRead(r.id);
+  assert.equal(visibleCorrection.analysis.summary, 'Reviewer corrected the summary.');
+  assert.equal(visibleCorrection.analysis.editedByOwner, true);
+  assert.ok(visibleCorrection.events.some(event => event.stage === 'edit'));
   assert.equal((await f.api(`/api/requests/${r.id}/approve`, {})).data.status, 'completed');
+  const visibleApproval = await requesterRead(r.id);
+  assert.equal(visibleApproval.status, 'completed');
+  assert.ok(visibleApproval.events.some(event => event.stage === 'approve'));
+  const second = await fetch(f.base + '/api/requests', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ title: 'Request to decline', message: 'Please check this unrelated request for our team.' }) });
+  const secondId = (await second.json()).id;
+  await f.api(`/api/requests/${secondId}/reject`, { reason: 'Please contact the correct team.' });
+  const visibleRejection = await requesterRead(secondId);
+  assert.equal(visibleRejection.status, 'rejected');
+  assert.equal(visibleRejection.rejectionReason, 'Please contact the correct team.');
   assert.equal((await fetch(f.base + '/api/workspace', { headers: { Cookie: cookie } })).status, 403);
 });
 test('connection secrets stay server-side and generated webhook token can intake but not approve', async t => {

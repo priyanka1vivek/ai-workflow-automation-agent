@@ -12,8 +12,20 @@ function node(tag, className, content) { const n = document.createElement(tag); 
 function date(value) { return new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); }
 function shortTime(value) { return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
 function notify(message, error = false) { const t = $('#toast'); t.textContent = message; t.className = `toast visible${error ? ' error' : ''}`; clearTimeout(notify.timer); notify.timer = setTimeout(() => t.classList.remove('visible'), 4500); }
-function signedOut() { $('#app-shell').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); }
-function signedIn(account) { state.email = account.email; state.role = account.role; $('#login-screen').classList.add('hidden'); $('#app-shell').classList.remove('hidden'); $('#profile-name').textContent = account.email; $('#profile-role').textContent = account.role === 'owner' ? 'Owner · reviewer' : 'Requester'; $('#profile-avatar').textContent = account.email[0].toUpperCase(); $('#workspace-label').firstChild.textContent = account.workspace || 'Support workspace'; document.querySelector('[data-view="integrations"]').closest('.nav-group').classList.toggle('hidden', account.role !== 'owner'); document.querySelector('.side-note').classList.toggle('hidden', account.role !== 'owner'); }
+function signedOut() { state.email = ''; $('#app-shell').classList.add('hidden'); $('#login-screen').classList.remove('hidden'); }
+function signedIn(account) {
+  state.email = account.email; state.role = account.role; state.view = 'overview';
+  const owner = account.role === 'owner';
+  $('#login-screen').classList.add('hidden'); $('#app-shell').classList.remove('hidden');
+  $('#profile-name').textContent = account.email; $('#profile-role').textContent = owner ? 'Owner · reviewer' : 'Requester';
+  $('#profile-avatar').textContent = account.email[0].toUpperCase();
+  $('#workspace-label').firstChild.textContent = owner ? account.workspace || 'Support workspace' : 'Shared workspace';
+  document.querySelector('[data-view="integrations"]').closest('.nav-group').classList.toggle('hidden', !owner);
+  document.querySelector('[data-view="activity"]').classList.toggle('hidden', !owner);
+  document.querySelector('.side-note').classList.toggle('hidden', !owner);
+  const filter = $('#status-filter');
+  if (!filter.querySelector('option[value="rejected"]')) filter.append(new Option('Rejected', 'rejected'));
+}
 function setAuthMode(mode) {
   state.authMode = mode; const register = mode === 'register';
   $('#auth-kicker').textContent = register ? 'GET STARTED' : 'WELCOME BACK';
@@ -37,34 +49,89 @@ async function load() {
   const [config, result, workspace] = await Promise.all([api('/api/config'), api('/api/requests'), state.role === 'owner' ? api('/api/workspace') : Promise.resolve(null)]);
   state.config = config; state.requests = result.requests; state.workspace = workspace; render();
 }
+// Requesters receive in-app updates while the portal is open; this does not send email or push notifications.
+setInterval(async () => {
+  if (state.role !== 'requester' || !state.email || document.visibilityState !== 'visible') return;
+  const previous = new Map(state.requests.map(r => [r.id, r.updatedAt]));
+  const openId = $('#detail-dialog').open ? $('#detail-dialog').dataset.requestId : null;
+  try {
+    await load();
+    if (openId) showDetail(openId);
+    if (state.requests.some(r => previous.has(r.id) && previous.get(r.id) !== r.updatedAt)) notify('A request has an update. Open it to see what changed.');
+  } catch { /* Keep existing content visible; manual refresh remains available. */ }
+}, 20000);
 function setView(view) {
-  if (!views[view] || (view === 'integrations' && state.role !== 'owner')) return;
+  if (!views[view] || (['integrations', 'activity'].includes(view) && state.role !== 'owner')) return;
   state.view = view;
   document.querySelectorAll('.nav-link').forEach(button => button.classList.toggle('active', button.dataset.view === view));
   document.querySelectorAll('.view').forEach(element => element.classList.toggle('hidden', element.id !== `${view}-view`));
   const [breadcrumb, kicker, title, description] = views[view];
   $('#breadcrumb-view').textContent = breadcrumb; $('#section-kicker').textContent = kicker; $('#page-title').textContent = title; $('#page-subtitle').textContent = description;
-  if (state.role !== 'owner' && view === 'overview') { $('#page-title').textContent = 'Your requests, from intake to resolution.'; $('#page-subtitle').textContent = 'Submit a request and follow its AI routing and review status.'; }
+  if (state.role !== 'owner') {
+    const requesterViews = {
+      overview: ['My requests', 'YOUR WORKSPACE', 'Keep track of your requests.', 'Submit a request and see what your reviewer decided.'],
+      requests: ['My requests', 'YOUR REQUESTS', 'Everything you submitted.', 'Open a request to see its status, summary and reviewer updates.']
+    };
+    const requester = requesterViews[view];
+    if (requester) {
+      $('#breadcrumb-view').textContent = requester[0]; $('#section-kicker').textContent = requester[1];
+      $('#page-title').textContent = requester[2]; $('#page-subtitle').textContent = requester[3];
+    }
+  }
   if (view === 'overview') renderOverview();
   if (view === 'requests') renderRequests();
   if (view === 'activity') renderActivity();
   if (view === 'integrations') renderConnections();
 }
 function pill(text, className = '') { return node('span', `pill ${className}`, text); }
+function displayStatus(r) {
+  if (state.role === 'owner') return statusNames[r.status] || r.status;
+  return { queued: 'Received', processing: 'Processing', review: 'Awaiting reviewer', delivering: 'Approved · delivering', completed: 'Approved', failed: 'Processing issue', partial: 'Delivery issue', rejected: 'Rejected' }[r.status] || r.status;
+}
 function render() {
   const r = state.requests, config = state.config;
   $('#metric-total').textContent = r.length;
   $('#metric-review').textContent = r.filter(item => item.status === 'review').length;
-  $('#metric-high').textContent = r.filter(item => item.analysis?.priority === 'high').length;
+  $('#metric-high').textContent = r.filter(item => state.role === 'owner' ? item.analysis?.priority === 'high' : item.status === 'rejected').length;
   $('#metric-complete').textContent = r.filter(item => item.status === 'completed').length;
-  $('#inbox-count').textContent = r.filter(item => ['review', 'queued', 'failed', 'partial'].includes(item.status)).length;
+  $('#inbox-count').textContent = state.role === 'owner' ? r.filter(item => ['review', 'queued', 'failed', 'partial'].includes(item.status)).length : r.length;
   $('#empty-onboarding').classList.toggle('hidden', r.length !== 0 || state.role !== 'owner');
+  $('#ai-badge').classList.toggle('hidden', state.role !== 'owner');
   $('#ai-badge').textContent = config.integrations.openai ? '● AI key configured' : '○ AI setup needed';
   $('#ai-badge').classList.toggle('unavailable', !config.integrations.openai);
   $('#setup-notice').classList.toggle('hidden', config.integrations.openai || state.role !== 'owner');
   $('#new-request-button').classList.toggle('hidden', state.role === 'owner');
   $('#new-request-button').textContent = '＋  Submit request';
-  $('#metric-review').parentElement.firstElementChild.textContent = state.role === 'owner' ? 'NEEDS YOUR REVIEW' : 'AWAITING REVIEW';
+  const owner = state.role === 'owner';
+  $('#metric-total-label').textContent = owner ? 'INCOMING REQUESTS' : 'YOUR REQUESTS';
+  $('#metric-review-label').textContent = owner ? 'NEEDS YOUR REVIEW' : 'IN PROGRESS';
+  $('#metric-review-caption').textContent = owner ? 'Decisions waiting' : 'Waiting for a decision or delivery';
+  $('#metric-review').textContent = owner ? r.filter(item => item.status === 'review').length : r.filter(item => !['completed', 'rejected'].includes(item.status)).length;
+  $('#metric-high-label').textContent = owner ? 'HIGH PRIORITY' : 'REJECTED';
+  $('#metric-high-caption').textContent = owner ? 'Worth checking first' : 'Reasons available';
+  $('#metric-complete-caption').textContent = owner ? 'Delivered or previewed' : 'Approved; view delivery details';
+  $('#recent-panel').classList.toggle('hidden', !owner);
+  $('#overview-list-kicker').textContent = owner ? 'UP NEXT' : 'MY REQUESTS';
+  $('#overview-list-title').textContent = owner ? 'Needs your review' : 'Latest updates';
+  $('#overview-list-description').textContent = owner ? 'Approve an AI decision after checking its summary and route.' : 'Open any request to see its current status and reviewer decision.';
+  const steps = owner ? [
+    ['Receive', 'A dashboard request or n8n webhook enters the queue.'], ['Understand', 'OpenAI assigns category, priority and a short summary.'],
+    ['Review', 'You inspect the reason, route and reply draft.'], ['Deliver', 'Approval sends to configured Slack and Sheets destinations.']
+  ] : [
+    ['Submit', 'Describe the issue and its impact.'], ['Triage', 'AI prepares a category, priority and summary.'],
+    ['Review', 'Your reviewer can correct, approve or reject the request.'], ['Track', 'Return here for status updates or a rejection reason.']
+  ];
+  $('#flow-kicker').textContent = owner ? 'HOW IT WORKS' : 'WHAT HAPPENS NEXT';
+  $('#flow-title').textContent = owner ? 'From intake to action.' : 'Your request journey.';
+  steps.forEach(([title, description], i) => {
+    $(`#flow-step-${i + 1}-title`).textContent = title;
+    $(`#flow-step-${i + 1}-text`).textContent = description;
+  });
+  $('#requests-view .panel-head .overline').textContent = owner ? 'INBOX' : 'MY REQUESTS';
+  $('#requests-view .panel-head h2').textContent = owner ? 'Every request in one place' : 'Your submitted requests';
+  $('#requests-view .panel-head p').textContent = owner ? 'Search, inspect AI decisions and approve delivery.' : 'Search your requests and open one to follow its status.';
+  document.querySelector('#status-filter option[value="failed"]').textContent = owner ? 'Needs attention' : 'Processing issue';
+  document.querySelector('#status-filter option[value="partial"]').textContent = owner ? 'Partial delivery' : 'Delivery issue';
   setView(state.view);
 }
 function allEvents() { return state.requests.flatMap(r => r.events.map(e => ({ ...e, requestId: r.id, requestTitle: r.title }))).sort((a, b) => b.at.localeCompare(a.at)); }
@@ -76,6 +143,20 @@ function eventRow(e, compact = false) {
 }
 function renderOverview() {
   const root = $('#review-list'); root.replaceChildren();
+  if (state.role !== 'owner') {
+    const latest = [...state.requests].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+    if (!latest.length) root.append(node('div', 'empty-inline', 'Nothing here yet. Select Submit request to send your first request to the reviewer.'));
+    for (const r of latest) {
+      const row = node('button', 'review-row'), main = node('span', 'review-copy');
+      const detail = r.status === 'rejected' ? `Reason: ${r.rejectionReason || 'Open for details'}`
+        : r.analysis?.editedByOwner ? `Reviewer updated the analysis · ${r.analysis.summary}`
+        : r.analysis?.summary || 'Your request has been received.';
+      main.append(node('strong', '', r.title), node('small', '', detail));
+      row.append(pill(displayStatus(r), r.status), main, node('span', 'arrow', '↗'));
+      row.onclick = () => showDetail(r.id); root.append(row);
+    }
+    return;
+  }
   const reviews = state.requests.filter(r => r.status === 'review').sort((a, b) => (a.analysis?.priority === 'high' ? -1 : 0) - (b.analysis?.priority === 'high' ? -1 : 0)).slice(0, 4);
   if (!reviews.length) root.append(node('div', 'empty-inline', state.role === 'owner' ? 'No decisions waiting. Invite a requester or connect n8n to receive work.' : 'No requests awaiting review. Submit one to your workspace.'));
   for (const r of reviews) {
@@ -97,11 +178,12 @@ function renderRequests() {
   $('#request-empty h3').textContent = state.requests.length ? 'No requests match.' : state.role === 'owner' ? 'No incoming requests yet.' : 'No requests submitted yet.';
   $('#request-empty p').textContent = state.requests.length ? 'Try a different search or status.' : state.role === 'owner' ? 'Invite a requester or connect n8n; incoming work will appear here.' : 'Submit a request to send it to the workspace reviewer.';
   $('#empty-create-button').classList.toggle('hidden', !!state.requests.length || state.role === 'owner');
+  $('#empty-create-button').textContent = 'Submit a request →';
   for (const r of records) {
     const tr = node('tr'), title = node('td'), button = node('button', 'table-title', r.title);
     button.onclick = () => showDetail(r.id); title.append(button, node('small', '', `${r.requester || r.source} · ${r.id.slice(0, 8)}`));
     const priority = node('td'); priority.append(r.analysis ? pill(r.analysis.priority, r.analysis.priority) : node('span', 'muted', '—'));
-    const status = node('td'); status.append(pill(statusNames[r.status] || r.status, r.status));
+    const status = node('td'); status.append(pill(displayStatus(r), r.status));
     const action = node('td'), open = node('button', 'table-open', '↗'); open.setAttribute('aria-label', `Open ${r.title}`); open.onclick = () => showDetail(r.id); action.append(open);
     tr.append(title, node('td', 'route-cell', r.analysis?.route || 'Awaiting analysis'), priority, status, node('td', 'muted', date(r.createdAt)), action); body.append(tr);
   }
@@ -134,11 +216,45 @@ function renderConnections() {
 function detailSection(title, content) { const box = node('section', 'detail-section'); box.append(node('span', 'overline', title), node('p', '', content)); return box; }
 function showDetail(id) {
   const r = state.requests.find(item => item.id === id); if (!r) return;
+  $('#detail-dialog').dataset.requestId = id;
   const root = $('#detail-content'); root.replaceChildren();
   const head = node('div', 'modal-head'), heading = node('div'), close = node('button', 'icon-button', '×'); close.setAttribute('aria-label', 'Close request'); close.onclick = () => $('#detail-dialog').close();
   heading.append(node('span', 'overline', `REQUEST ${r.id.slice(0, 8).toUpperCase()}`), node('h2', '', r.title)); head.append(heading, close); root.append(head);
-  const meta = node('div', 'detail-meta'); meta.append(pill(statusNames[r.status] || r.status, r.status), node('span', '', `${r.source} · ${date(r.createdAt)}`)); root.append(meta);
+  const meta = node('div', 'detail-meta'); meta.append(pill(displayStatus(r), r.status), node('span', '', `Submitted ${date(r.createdAt)}`)); root.append(meta);
   root.append(detailSection('ORIGINAL REQUEST · IDENTIFIERS REDACTED', r.message));
+  if (state.role !== 'owner') {
+    const message = r.status === 'rejected' ? 'The reviewer declined this request. The reason is below.'
+      : r.status === 'completed' ? 'The reviewer approved this request. Open the delivery information below for its outcome.'
+      : r.status === 'partial' ? 'The reviewer approved this request, but delivery needs attention.'
+      : r.status === 'failed' ? 'AI processing failed. Your reviewer can retry classification.'
+      : r.status === 'review' ? 'Your request has been analyzed and is waiting for a reviewer.'
+      : 'Your request was received and is being processed.';
+    root.append(detailSection('CURRENT STATUS', message));
+    if (r.analysis) {
+      const a = r.analysis, analysis = node('section', 'analysis-panel');
+      analysis.append(node('span', 'overline', a.editedByOwner ? 'REVIEWER UPDATED THE ANALYSIS' : 'REQUEST SUMMARY'), node('h3', '', a.summary));
+      const facts = node('div', 'analysis-facts');
+      for (const [label, value] of [['Category', a.category], ['Priority', a.priority], ['Team', a.route]]) {
+        const fact = node('div'); fact.append(node('small', '', label), node('strong', '', value)); facts.append(fact);
+      }
+      analysis.append(facts); root.append(analysis);
+    }
+    if (r.rejectionReason) root.append(detailSection('REVIEWER REASON', r.rejectionReason));
+    const updates = r.events.filter(e => ['receive', 'edit', 'reject', 'approve', 'slack', 'sheets'].includes(e.stage));
+    const history = node('section', 'detail-section detail-log requester-updates'); history.append(node('span', 'overline', 'REQUEST UPDATES'));
+    for (const e of updates) {
+      const label = { receive: 'Submitted', edit: 'Analysis updated', reject: 'Rejected', approve: 'Approved', slack: 'Slack delivery', sheets: 'Sheets delivery' }[e.stage];
+      const description = e.stage === 'edit' ? 'The reviewer updated the category, priority or summary.'
+        : e.stage === 'reject' ? 'The reviewer rejected this request. See the reason above.'
+        : e.stage === 'approve' ? 'The reviewer approved delivery.'
+        : e.stage === 'receive' ? 'Your request was received.'
+        : e.status === 'error' ? 'Delivery needs attention.' : e.detail;
+      const entry = node('div'); entry.append(node('time', '', date(e.at)), node('strong', '', label), node('span', '', description)); history.append(entry);
+    }
+    root.append(history);
+    if (!$('#detail-dialog').open) $('#detail-dialog').showModal();
+    return;
+  }
   if (r.analysis) {
     const a = r.analysis, analysis = node('section', 'analysis-panel');
     analysis.append(node('span', 'overline', a.editedByOwner ? 'OPENAI TRIAGE · OWNER CORRECTED' : 'OPENAI TRIAGE'), node('h3', '', a.summary));
